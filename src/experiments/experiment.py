@@ -133,7 +133,11 @@ class experiment():
         if fromSave:
             portName = portInfo
         else:   
-            portName = portInfo[:portInfo.find(' ')] #PARSING FOR HOW PORT NAME IS DETERMINED - may need to be manually adjusted based on operating system
+            space_index = portInfo.find(' ')
+            if space_index == -1:
+                portName = portInfo
+            else:    
+                portName = portInfo[:portInfo.find(' ')] #PARSING FOR HOW PORT NAME IS DETERMINED - may need to be manually adjusted based on operating system
             
         self.ttlPort = portName
         
