@@ -21,9 +21,10 @@ class TumblingPairs(protocol):
     
     def __init__(self):
         super().__init__()
-        #protocal parameters
+        #protocol parameters
         self.protocolName = 'TumblingPairs' #Tumbling Pairs presents a pseudorandom series of squares and circles to a subject and asks for dynamic feedback about the identity of each stimulus. The subject presses 's' to indicate a square and 'c' to indicate a circle.
-        self.totalEpochs = 280 #total number of epochs in the stimulus
+        self.totalEpochs = 250 #total number of epochs in the stimulus
+        self.safety = 165 #if the deltaAngle is greater than this value, then the true angle is likely close to 180 degrees and the subject input the correct angle.
         #optotype parameters
         self.numberOfOptotypes = 20 #number of different optotype levels/sizes to draw from
         self.optotypeColor = [1.0, 1.0, 1.0] #Color of the optotype (in RGB). -1.0 equates to 0 and 1.0 equates to 255 for 8 bit colors.
@@ -33,7 +34,7 @@ class TumblingPairs(protocol):
         self.scotomaOpacity = 1.0 #The opacity of the scotomas. 1.0 is fully opaque, 0.0 is fully transparent
         self.scotomaSize = 0.1 #degrees - side lengths of the scotomas, which are squares
         self.scotomaColor = [0.0, 0.0, 0.0] #color of the scotomas (in RGB). -1.0 equates to 0 and 1.0 equates to 255 for 8 bit colors.
-        self.scotomaRange = [30000, 51000] #scotoma count range from lower range to upper range
+        self.scotomaRange = [0.0, 1.0] #scotoma proportion range from lower range to upper range
         #input line parameters
         self.lineSize = [2, 80] #[width, length] of input line in pixels
         self.linePos = [280, -190] #coordinate position of the left end of the line. (0,0) is the center and each quadrant is a 400x300 rectangle
@@ -48,11 +49,19 @@ class TumblingPairs(protocol):
     
     def internalValidation(self):
         '''
-        placeholder for internalValidation function, which usually exists in the subclass. If the subclass doesn't have an internal validation function, then this generic one is run instead
+        Checks that color values are valid and that scotomaRange is valid.
         '''
         tf = True
         errorMessage = []
-
+        
+        #check that scotomaRange is a valid range of proportions
+        if self.scotomaRange[0] > 1 or self.scotomaRange[1] > 1:
+            tf = False
+            errorMessage.append("Value(s) in self.scotomaRange was/are greater than 1. self.scotomaRange is a range of the proportion of the window covered by scotomas and must only contain values between 0 and 1.")
+        if self.scotomaRange[0] > self.scotomaRange[1]:
+            tf = False
+            errorMessage.append("First listed proportion in scotomaRange cannot be greater than the second listed proportion")
+            
         #checks color values
         tf, colorErrorMessages = self.validateColorInput()
         errorMessage += colorErrorMessages
@@ -69,52 +78,54 @@ class TumblingPairs(protocol):
         
         returns: estimated time in seconds
         '''
-        self._estimatedTime = 120 #return estimated time for the total stimulus in seconds
+        self._estimatedTime = self.totalEpochs * 4 #return estimated time for the total stimulus in seconds
         
         return self._estimatedTime
                 
-    def scatter(self, win, overlapping):
+    def scatter(self, win, mask, overlapping):
         '''
         This function has two purposes:
             1. randomly select coodinates for each pair and put them into this numpy array: self.optotypePositions
             2. randomly select scotomas on screen to make visible
         '''
         #random.seed(self.randomSeed) #reinitialize the random seed
-        self.optotypePositions = np.zeros((self.numberOfOptotypes, 2))
+        optotypePositions = np.zeros((self.numberOfOptotypes, 2))
         for pair in range(self.numberOfOptotypes):
             self.xPos = random.uniform(-win.size[0]/2 + self.circleRadius_pix*2, win.size[0]/2 - self.circleRadius_pix*2)
             self.yPos = random.uniform(-win.size[1]/2 + self.circleRadius_pix*2, win.size[1]/2 - self.circleRadius_pix*2)
-            self.optotypePositions[pair] = [self.xPos, self.yPos]
+            optotypePositions[pair] = [self.xPos, self.yPos]
         
         #check if circles overlap
         protection = 0
         while overlapping and protection < 1000:
             c = 0
-            for i, c1 in enumerate(self.optotypePositions):
-                for j, c2 in enumerate(self.optotypePositions):
+            for i, c1 in enumerate(optotypePositions):
+                for j, c2 in enumerate(optotypePositions):
                     distance = math.sqrt((c2[0]- c1[0])**2 + (c2[1] - c1[1])**2) #distance between the junction point of one pair and the junction point of another pair
                     if distance < 4*self.circleRadius_pix and i != j: #if the pairs overlap, pick a new random coordinate
                         c += 1  
                         self.xPos = random.uniform(-win.size[0]/2 + self.circleRadius_pix*2, win.size[0]/2 - self.circleRadius_pix*2)
                         self.yPos = random.uniform(-win.size[1]/2 + self.circleRadius_pix*2, win.size[1]/2 - self.circleRadius_pix*2)
-                        self.optotypePositions[j] = [self.xPos, self.yPos]
+                        optotypePositions[j] = [self.xPos, self.yPos]
                     else:
                         continue
             protection += 1
             if c == 0:
                 overlapping = False
-                for index, coordinate in enumerate(self.optotypePositions): #the random x and y positions were based of the junction point for each pair. Since pairs are drawn at the center of one circle and not the junction point, this calculates the center coordinates of one circle based on the randomly chosen coordinate for the junction point.
-                    self.xPos = self.optotypePositions[index][0] - (self.circleRadius_pix * math.cos(self.arcAngle))
-                    self.yPos = self.optotypePositions[index][1] - (self.circleRadius_pix * math.cos(self.arcAngle))
+                for index, coordinate in enumerate(optotypePositions): #the random x and y positions were based of the junction point for each pair. Since pairs are drawn at the center of one circle and not the junction point, this calculates the center coordinates of one circle based on the randomly chosen coordinate for the junction point.
+                    self.xPos = optotypePositions[index][0] - (self.circleRadius_pix * math.cos(self._arcAngle))
+                    self.yPos = optotypePositions[index][1] - (self.circleRadius_pix * math.cos(self._arcAngle))
                 
             if protection == 1000:
                 print("Pairs may overlap. Adjust the size and/or density of the pairs.")
-                    
-        #randomly select scotomas to make visible
-        self.scotomaDensity = random.randint(self.scotomaRange[0], self.scotomaRange[1])
-        scotomaIndices = random.sample([i for i in range(self.numTotalScotomas)], self.scotomaDensity)
-        self.mask[scotomaIndices] = self.scotomaOpacity
-        self.scotomaCoverage.append(self.scotomaDensity/self.numTotalScotomas)
+
+        
+        self.scotomaDensity = random.randint(int(self.scotomaRange[0]*self.numTotalScotomas), int(self.scotomaRange[1]*self.numTotalScotomas))
+        scotomaIndices = random.sample([i for i in range(self.numTotalScotomas)], int(self.scotomaDensity))
+        mask[scotomaIndices] = self.scotomaOpacity
+        self._scotomaCoverage.append(self.scotomaDensity/self.numTotalScotomas)
+        
+        return optotypePositions, mask
         
     def run(self, win, informationWin):
         '''
@@ -138,8 +149,8 @@ class TumblingPairs(protocol):
             event.waitKeys() #wait for key press  
         
         #Data for the stimulus
-        self.deltaAngles = [] #the change between the userAngle and the arcAngle
-        self.scotomaCoverage = [] #fraction of the screen covered by scotomas. If the scotomas are significantly smaller than the pairs, then the fractional coverage of the window will be approximately equal to the average coverage for the pairs.
+        self._deltaAngles = [] #the change between the userAngle and the arcAngle
+        self._scotomaCoverage = [] #fraction of the screen covered by scotomas. If the scotomas are significantly smaller than the pairs, then the fractional coverage of the window will be approximately equal to the average coverage for the pairs.
         
         instructions = 'Tumbling Pairs Test for Visual Acuity: \nPress left and right arrows keys to match the line with the angle of the pairs \n\nPress any key to begin'
         self.showInformationText(win, instructions)
@@ -155,29 +166,27 @@ class TumblingPairs(protocol):
         xCoordinates = [x - win.size[0]/2 for x in range(-self.scotomaSize_pix, win.size[0]+self.scotomaSize_pix, self.scotomaSize_pix)]
         yCoordinates = [y - win.size[1]/2 for y in range(-self.scotomaSize_pix, win.size[1]+self.scotomaSize_pix, self.scotomaSize_pix)]
         self.numTotalScotomas = len(xCoordinates) * len(yCoordinates)
-        if self.scotomaRange[1] > self.numTotalScotomas:
-            self.scotomaRange[1] = self.numTotalScotomas
-            print(f"\n***Maximum value in self.scotomaRange was greater than the total number of scotomas possible based on current scotoma parameters and window dimensions. Bassoon automatically replaced the maximum value with largest number of scotomas possible ({self.numTotalScotomas}).")
+
         sizes = [(self.scotomaSize_pix, self.scotomaSize_pix) for i in range(self.numTotalScotomas)]
         
-        self._scotomaCoordinates = []
+        scotomaCoordinates = []
         for i in range(len(xCoordinates)):
             for j in range(len(yCoordinates)):
-                self._scotomaCoordinates.append([xCoordinates[i], yCoordinates[j]])
+                scotomaCoordinates.append([xCoordinates[i], yCoordinates[j]])
 
         scotomaMask = visual.ElementArrayStim(
             win,
             nElements = self.numTotalScotomas,
             elementMask="None",
             elementTex = None,
-            xys = self._scotomaCoordinates,
+            xys = scotomaCoordinates,
             sizes = sizes,
             colors = self.scotomaColor
             )
         
         random.seed(self.randomSeed) #reinitialize the random seed
-        self.mask = np.zeros((self.numTotalScotomas, 1)) #1 is fully transparent, -1 is fully opaque. Start with a fully transparent mask.
-        scotomaMask.opacities = self.mask #set the first mask
+        mask = np.zeros((self.numTotalScotomas, 1)) #1 is fully transparent, -1 is fully opaque. Start with a fully transparent mask.
+        scotomaMask.opacities = mask #set the first mask
         
         #initialize angle input line
         inputLine = visual.Line(
@@ -198,52 +207,66 @@ class TumblingPairs(protocol):
             )
         
         #assign parameters
-        self.arcAngle = math.radians(random.randint(0,180)) #radians -- angle of optotype pairs.
-        self.arcAngle_deg = math.degrees(self.arcAngle) #degrees
-        self.scatter(win, overlapping=True)
-        scotomaMask.opacities = self.mask
+        self._arcAngle = math.radians(random.randint(0,180)) #radians -- angle of optotype pairs.
+        self._arcAngle_deg = math.degrees(self._arcAngle) #degrees
+        optotypePositions, mask = self.scatter(win, mask, overlapping=True)
+        scotomaMask.opacities = mask
         epochNum = 0
         testComplete = False
         trialClock = core.Clock() #this will reset every trial
-        
+        self._reactionTimes = []
+        reactionTimeStart = time.perf_counter()
+        newEpochFlag = True
+
         while not testComplete:
-            for pair in range(self.numberOfOptotypes):
-                self.xPos = self.optotypePositions[pair][0]
-                self.yPos = self.optotypePositions[pair][1]
-                #rotate optotype
-                xChange = 2 * self.circleRadius_pix * math.cos(self.arcAngle) # R * cos(theta) gets the change in x of the center of the second circle from the first circle at a given angle and radius
-                yChange = 2 * self.circleRadius_pix * math.sin(self.arcAngle)
-                self.xNew = self.xPos + xChange
-                self.yNew = self.yPos + yChange
-                
-                #initialize a pair
-                optotypeCircleOne = visual.Circle(
-                    win = win,
-                    radius = self.circleRadius_pix,
-                    units = 'pix',
-                    lineColor = self.optotypeColor,
-                    lineWidth = 2,
-                    fillColor = self.optotypeColor,
-                    pos = (self.xPos, self.yPos)
-                    )
-                
-                optotypeCircleTwo = visual.Circle(
-                    win = win,
-                    radius = self.circleRadius_pix,
-                    units = 'pix',
-                    lineColor = self.optotypeColor,
-                    lineWidth = 2,
-                    fillColor = self.optotypeColor,
-                    pos = (self.xNew, self.yNew)
-                    )
-                optotypeCircleOne.draw()
-                optotypeCircleTwo.draw()
+            if newEpochFlag:
+                circleOnes = []
+                circleTwos = []
+                for pair in range(self.numberOfOptotypes):
+                    self.xPos = optotypePositions[pair][0]
+                    self.yPos = optotypePositions[pair][1]
+                    #rotate optotype
+                    xChange = 2 * self.circleRadius_pix * math.cos(self._arcAngle) # x' =  R * cos(theta)
+                    yChange = 2 * self.circleRadius_pix * math.sin(self._arcAngle) # y' = R * sin(theta)
+                    self.xNew = self.xPos + xChange
+                    self.yNew = self.yPos + yChange
+                    
+                    #initialize a pair
+                    optotypeCircleOne = visual.Circle(
+                        win = win,
+                        radius = self.circleRadius_pix,
+                        units = 'pix',
+                        lineColor = self.optotypeColor,
+                        lineWidth = 2,
+                        fillColor = self.optotypeColor,
+                        pos = (self.xPos, self.yPos)
+                        )
+                    
+                    optotypeCircleTwo = visual.Circle(
+                        win = win,
+                        radius = self.circleRadius_pix,
+                        units = 'pix',
+                        lineColor = self.optotypeColor,
+                        lineWidth = 2,
+                        fillColor = self.optotypeColor,
+                        pos = (self.xNew, self.yNew)
+                        )
+                    
+                    circleOnes.append(optotypeCircleOne)
+                    circleTwos.append(optotypeCircleTwo)
+            
+               
+                newEpochFlag = False
+            
+            [x.draw() for x in circleOnes]
+            [x.draw() for x in circleTwos]
+
             
             scotomaMask.draw()
             inputBackground.draw()
             inputLine.draw()
             win.flip()
-
+            
             keyPressed = kb.waitKeys(keyList=['right', 'left', 'q', 'return'], waitRelease=False, clear=False)
             if keyPressed:
                 key = [key.value for key in keyPressed]
@@ -253,12 +276,14 @@ class TumblingPairs(protocol):
             if key == 'q':
                 break
             elif key == 'right':
-                inputLine.ori += 5
+                inputLine.ori += 1
                 inputLine.draw()
             elif key == 'left':
-                inputLine.ori -= 5
+                inputLine.ori -= 1
                 inputLine.draw()
-            elif key == 'return': #this key MUST be pressed only once when the user wants to submit an answer. Holding the enter key will continually submit angles.
+            elif key == 'return': #this key must be pressed only ONCE when the user wants to submit an answer. Holding the enter key will continually submit angles.
+                self._reactionTimes.append(time.perf_counter() - reactionTimeStart)
+                reactionTimeStart = time.perf_counter()
                 userAngle = 90 - inputLine.ori
                 
                 #correct userAngle to the accurate angle between 0 and 180 degrees
@@ -281,24 +306,27 @@ class TumblingPairs(protocol):
                         else:
                             userAngle = userAngle + 180
                 
-                deltaAngle = abs(self.arcAngle_deg - userAngle)
+                deltaAngle = abs(self._arcAngle_deg - userAngle)
                 
-                if deltaAngle >= 170: #the subject might inadvertently move the line to a 0 degree angle if pairs are at a 180 degree angle, leading to an inaccurately large deltaAngle.
-                    if userAngle < self.arcAngle_deg:
-                        deltaAngle = abs((userAngle + 180) - self.arcAngle_deg)
-                    elif userAngle > self.arcAngle_deg:
-                        deltaAngle = abs((self.arcAngle_deg + 180) - userAngle)
+                #the subject might inadvertently move the line to a 0 degree angle if pairs are at a 180 degree angle, leading to an inaccurately large deltaAngle.
+                if deltaAngle >= self.safety: 
+                    if userAngle < self._arcAngle_deg:
+                        deltaAngle = abs((userAngle + 180) - self._arcAngle_deg)
+                    elif userAngle > self._arcAngle_deg:
+                        deltaAngle = abs((self._arcAngle_deg + 180) - userAngle)
                 
-                self.deltaAngles.append(deltaAngle)
+                self._deltaAngles.append(deltaAngle)
                 
                 #reassign parameters
                 epochNum += 1
-                self.mask = np.zeros((self.numTotalScotomas, 1)) #1 is fully transparent, -1 is fully opaque. Start with a fully transparent mask.
-                self.arcAngle = math.radians(random.randint(0,180)) #radians -- angle of optotype pairs.
-                self.arcAngle_deg = math.degrees(self.arcAngle) #degrees
-                self.scatter(win, overlapping=True)
-                scotomaMask.opacities = self.mask
-
+                mask = np.zeros((self.numTotalScotomas, 1)) #1 is fully transparent, -1 is fully opaque. Start with a fully transparent mask.
+                self._arcAngle = math.radians(random.randint(0,180)) #radians -- angle of optotype pairs.
+                self._arcAngle_deg = math.degrees(self._arcAngle) #degrees
+                optotypePositions, mask = self.scatter(win, mask, overlapping=True)
+                scotomaMask.opacities = mask
+                
+                newEpochFlag = True
+                
 
             if epochNum == self.totalEpochs:
                 testComplete = 1
