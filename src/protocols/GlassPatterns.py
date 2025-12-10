@@ -17,12 +17,12 @@ import serial, random, math, time
 from psychopy.hardware import keyboard
 import numpy as np
 
-class TumblingPairs(protocol):
+class GlassPatterns(protocol):
     
     def __init__(self):
         super().__init__()
         #protocol parameters
-        self.protocolName = 'TumblingPairs' #Tumbling Pairs presents a pseudorandom series of squares and circles to a subject and asks for dynamic feedback about the identity of each stimulus. The subject presses 's' to indicate a square and 'c' to indicate a circle.
+        self.protocolName = 'GlassPatterns' #Glass Patterns presents a pseudorandom series of squares and circles to a subject and asks for dynamic feedback about the identity of each stimulus. The subject presses 's' to indicate a square and 'c' to indicate a circle.
         self.totalEpochs = 250 #total number of epochs in the stimulus
         self.safety = 165 #if the deltaAngle is greater than this value, then the true angle is likely close to 180 degrees and the subject input the correct angle.
         #optotype parameters
@@ -129,7 +129,7 @@ class TumblingPairs(protocol):
         
     def run(self, win, informationWin):
         '''
-        Executes the Tumbling Pairs stimulus
+        Executes the Glass Patterns stimulus
         '''
         self._completed = 0 #started but not completed
         self._informationWin = informationWin #tuple, save here so you don't have to pass this as a function parameter every time you use it
@@ -145,14 +145,14 @@ class TumblingPairs(protocol):
         
         #Pause for keystroke if the user wants to manually initiate
         if self.userInitiated:
-            self.showInformationText(win, 'Stimulus Information: Tumbling Pairs \nPress any key to begin')
+            self.showInformationText(win, 'Stimulus Information: Glass Patterns \nPress any key to begin')
             event.waitKeys() #wait for key press  
         
         #Data for the stimulus
         self._deltaAngles = [] #the change between the userAngle and the arcAngle
         self._scotomaCoverage = [] #fraction of the screen covered by scotomas. If the scotomas are significantly smaller than the pairs, then the fractional coverage of the window will be approximately equal to the average coverage for the pairs.
         
-        instructions = 'Tumbling Pairs Test for Visual Acuity: \nPress left and right arrows keys to match the line with the angle of the pairs \n\nPress any key to begin'
+        instructions = 'Glass Patterns Test for Visual Acuity: \nPress left and right arrows keys to match the line with the angle of the pairs \n\nPress any key to begin'
         self.showInformationText(win, instructions)
         event.waitKeys() #wait for key press
         

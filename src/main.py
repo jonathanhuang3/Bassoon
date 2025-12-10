@@ -52,7 +52,7 @@ from protocols.ImageJitter import ImageJitter
 from protocols.ScotomaMovingGrating import ScotomaMovingGrating
 from protocols.Flicker import Flicker
 from protocols.SumOfSinesOscillation import SumOfSinesOscillation
-from protocols.TumblingPairs import TumblingPairs
+from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
 
 class Bassoon:
