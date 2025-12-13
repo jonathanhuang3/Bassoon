@@ -14,7 +14,6 @@ Created on Mon Aug  2 15:46:55 2021
 from protocols.protocol import protocol
 from psychopy import core, visual, data, event, monitors
 import serial, random, math, time
-from psychopy.hardware import keyboard
 import numpy as np
 
 class DirectionalDots(protocol):
@@ -34,7 +33,7 @@ class DirectionalDots(protocol):
         self.scotomaEndFraction = 1.0 #Fraction of pixels that end as a scotoma after one growth/decay period. This number can be between 0.0 and 1.0
         self.scotomaOpacity = 1.0 #The opacity of the scotomas. 1.0 is fully opaque, 0.0 is fully transparent
         self.scotomaReverse = True #bool - True means that the scotomas will go from start to end and then end to start again. False means they will only go from start to end (press the information button on protocolName for more insight).
-        self.scotomaGrowthTime = 15.0 #80.0 #seconds - the amount of time that one growth/decay period takes.
+        self.scotomaGrowthTime = 10.0 #80.0 #seconds - the amount of time that one growth/decay period takes.
         self.scotomaBookendTime = 5.0 #10.0 #seconds - the amount of time that each bookend takes. During the bookends, the grating moves but the scotomas do not change. All bookends must be the same length. There are a maximum of three bookends per epoch: Once immediately after the pretime, once immediately before the tail time, and (if scotomaReverse is set to True) once between the first and second growth/decay times.
         self.scotomaGrowth = 'lin' #Sets the pattern of scotoma growth. Currently only 'lin' is supported for linear growth
         self.scotomaSize = 0.25 #degrees - The size of the scotomas (height and width). Scotomas will be square, such that height == width
@@ -45,7 +44,7 @@ class DirectionalDots(protocol):
         self.proportionAberrant = 0.0 # Proportion of dots that are moving in a different direction
         self.dotColor = [1.0, 1.0, 1.0] #Color of the dot (in RGB). -1.0 equates to 0 and 1.0 equates to 255 for 8 bit colors.
         self.opacity = 1.0 # Opacity of the aberrant dots (0.0 to 1.0)
-        self.dotRadius_degrees = 0.50 #degrees - radius of the smallest optotype
+        self.dotRadius_degrees = 0.5 #degrees - radius of the smallest optotype
         self.dotLifetime = 0.1 # seconds
         self.lifetimeOffset = 0.025 # seconds - maximum possible offset so that each dot's lifetime ends at slightly different times
         self.orientations = [90.0] # direction in degrees that dots will travel (e.g. 225 == southwest).
@@ -141,8 +140,8 @@ class DirectionalDots(protocol):
             win.size[1]/2 - self.dotRadius_pix*2
             ) 
         if dot:
-            dot.spawnTime = time.perf_counter() # Start lifetime timer for this dot      
-            dot.pos = (xPos, yPos) # Randomize dot position 
+            self.currentFrames[dot] = 0 # Start lifetime timer for this dot      
+            self.dotCoords[dot] = [xPos, yPos] # Randomize dot position 
         
         return xPos, yPos
     
@@ -157,11 +156,11 @@ class DirectionalDots(protocol):
         '''
         orientations = self.orientations
         self._orientationLog = []
-        random.seed(self.randomSeed) #reinitialize the random seed
+        #random.seed(self.randomSeed) #reinitialize the random seed
 
         for n in range(self.stimulusReps):
             self._orientationLog += random.sample(orientations, len(orientations))
-            
+        
         return
 
     def createScotomaGrowthSequence(self, numScotomasToAdd, numTotalScotomas, scotomaIndices):
@@ -213,6 +212,8 @@ class DirectionalDots(protocol):
         self._informationWin = informationWin #tuple, save here so you don't have to pass this as a function parameter every time you use it
         self.getFR(win)
 
+        random.seed(self.randomSeed) #reinitialize the random seed        
+
         #update the stim time
         if self.scotomaReverse:
             self.stimTime = 3*self.scotomaBookendTime + 2*self.scotomaGrowthTime
@@ -252,7 +253,6 @@ class DirectionalDots(protocol):
             colors = self.scotomaColor
             )
         
-        random.seed(self.randomSeed) #reinitialize the random seed        
         mask = np.zeros((numTotalScotomas, 1)) #1 is fully transparent, -1 is fully opaque. Start with a fully transparent mask.    
         
         #fill the mask with the number of scotomas needed at the start of the stimulus
@@ -286,39 +286,44 @@ class DirectionalDots(protocol):
         if self.userInitiated:
             self.showInformationText(win, 'Stimulus Information: Directional Dots \nPress any key to begin')
             event.waitKeys() #wait for key press  
-        
-        
-        kb = keyboard.Keyboard()
-        
+                
         win.color = self.backgroundColor
         win.flip()
         win.flip()
-
-        # Create all dot objects and assign to a list
-        self.dots = []
-        random.seed(self.randomSeed) #reinitialize the random seed
+        
+        # Create all dots as an elementArrayStim object (see Psychopy documentation for more info)
+        self.dotCoords = np.zeros((self.numberOfDots, 2))
+        diameters = []
+        aberrantDots = []
+        dotIntervalFrames = []
         for d in range(self.numberOfDots):
+            # Assign random [x,y] coordinate lists to a list
+            xPos, yPos = self.lifetime(win)
+            self.dotCoords[d][0] = xPos
+            self.dotCoords[d][1] = yPos
+            # Add list of dot diameters
+            diameters.append(2*self.dotRadius_pix)
+            # Add user-specified number of aberrant dots 
+            aberrantTF = True if numAberrantDots > d else False
+            aberrantDots.append(aberrantTF)
+            # Assign a dot lifetime (in frames) to each dot
             startTime = random.uniform(0, self.lifetimeOffset) # seconds - 
             interval = self.dotLifetime - startTime # seconds
             intervalFrames = self._FR * interval # num of frames dot will move before repositioning
-            xPos, yPos = self.lifetime(win)
-            # Instantiate dot object
-            dot = visual.Circle(
-                win = win,
-                radius = self.dotRadius_pix,
-                units = 'pix',
-                lineColor = self.dotColor,
-                lineWidth = 2,
-                fillColor = self.dotColor,
-                pos = (xPos, yPos),
-                opacity = self.opacity if d < numAberrantDots else 1.0 # Only set opacity for aberrant dots
-                )
-            dot.intervalFrames = intervalFrames # Assign a dot lifetime (in frames) to each dot instance
-            dot.lifetime = self.lifetime  # Attach the lifetime method to each dot instance
-            dot.aberrant = True if numAberrantDots > d else False # Assign whether dot is aberrant or not
-            self.dots.append(dot)
-
-        random.seed(self.randomSeed) #reinitialize the random seed
+            dotIntervalFrames.append(intervalFrames)
+        aberrant_mask = np.array(aberrantDots) # Logical array: aberrant dot = True, normal dot= False
+        normal_mask = ~np.array(aberrantDots) # Logical array: inverse of above
+        
+        dots = visual.ElementArrayStim(
+            win,
+            units = 'pix',
+            nElements = self.numberOfDots,
+            elementMask="circle",
+            elementTex = None,
+            xys = self.dotCoords.tolist(), 
+            sizes = diameters, 
+            colors = self.dotColor
+            )
         
         self.createOrientationLog()
 
@@ -338,8 +343,8 @@ class DirectionalDots(protocol):
             # Specify dot movement parameters
             directionRad = math.radians(self.deg0to360(ori)) # radians - direction of dot movement 
             aberrantDirRad = math.radians(self.deg0to360(self.directionAberrant)) # radians - direction of aberrant dot movement 
-            speedComponents = [pixPerFrame*math.cos(directionRad), pixPerFrame*math.sin(directionRad)]
-            aberrantComponents = [pixPerFrame*math.cos(aberrantDirRad), 2*pixPerFrame*math.sin(aberrantDirRad)]
+            speedComponents = np.array([pixPerFrame*math.cos(directionRad), pixPerFrame*math.sin(directionRad)])
+            aberrantComponents = np.array([pixPerFrame*math.cos(aberrantDirRad), 2*pixPerFrame*math.sin(aberrantDirRad)])
             
             ## Inter-stimulus interval ##
             win.color = self.backgroundColor
@@ -351,28 +356,34 @@ class DirectionalDots(protocol):
             ## Pre-time ## (stationary dots)
             self._stimulusStartLog.append(trialClock.getTime())
             self.sendTTL()
-            self._numberOfEpochsStarted += 1            
+            self._numberOfEpochsStarted += 1
             for f in range(self._preTimeNumFrames):
-                print("pretime:3s")
-                for dot in self.dots:
-                    dot.draw()
+                dots.draw()
                 scotomaMask.draw()
                 win.flip()
                 if self.checkQuitOrPause():
                     return
             
             ## Stim-time ##
-            [setattr(dot, 'spawnTime', time.perf_counter()) for dot in self.dots]  # Start lifetime timer for all dots
+            self.spawnTimes = [0 for d in range(self.numberOfDots)]
+            self.currentFrames = np.zeros(self.numberOfDots)
             # First bookend
             for f in range(self._numFramesBookend):
-                print("first bookend: 5s") # debug
-                for dot in self.dots:
-                    dot.endTime = time.perf_counter()
-                    dot.elapsedTime = dot.endTime - dot.spawnTime # seconds
-                    if (dot.elapsedTime*self._FR) >= intervalFrames:
-                        dot.lifetime(win, dot=dot) # Reposition dot at another random location
-                    dot.pos += speedComponents if not dot.aberrant else aberrantComponents
-                    dot.draw()                
+                self.currentFrames += 1
+                for dot in range(self.numberOfDots):
+                    if self.currentFrames[dot] >= dotIntervalFrames[dot]:
+                        self.lifetime(win, dot=dot) # Reposition dot at another random location
+                self.dotCoords = np.array(self.dotCoords) # list --> np array
+                # Move normal dots
+                if self.dotCoords[normal_mask][:].size != 0:
+                    self.dotCoords[normal_mask, 0] += speedComponents[0]
+                    self.dotCoords[normal_mask, 1] += speedComponents[1]
+                # Move aberrant dots 
+                if self.dotCoords[aberrant_mask][:].size != 0:
+                    self.dotCoords[aberrant_mask, 0] += aberrantComponents[0]
+                    self.dotCoords[aberrant_mask, 1] += aberrantComponents[1]
+                dots.xys = self.dotCoords.tolist() # Move the dots to their new positions
+                dots.draw()               
                 scotomaMask.draw()
                 win.flip()
                 if self.checkQuitOrPause():
@@ -380,71 +391,104 @@ class DirectionalDots(protocol):
                 
             #first check whether you will be adding or taking away scotomas. Assign the addColor accordingly so that when you update the mask it either places a scotoma or sets the value to transparent
             addColor = self.scotomaOpacity if numScotomasToAdd > 0 else 0
-            print(addColor) # debug
             
             #scotoma growth starts here
             count = 0 
-            print("growth: 15s") # debug
             for f in range(self._numFramesGrowth):
                 scotomasToChangeThisFrame = self._scotomaSequence[count:count+self._newScotomasPerFrame[f]]
                 count += self._newScotomasPerFrame[f]
                 mask[scotomasToChangeThisFrame] = addColor
                 scotomaMask.opacities = mask
-                for dot in self.dots:
-                    dot.endTime = time.perf_counter()
-                    dot.elapsedTime = dot.endTime - dot.spawnTime # seconds
-                    if (dot.elapsedTime*self._FR) >= intervalFrames:
-                        dot.lifetime(win, dot=dot) # Reposition dot at another random location
-                    dot.pos += speedComponents if not dot.aberrant else aberrantComponents
-                    dot.draw()                
+                self.currentFrames += 1
+                for dot in range(self.numberOfDots):
+                    if self.currentFrames[dot] >= dotIntervalFrames[dot]:
+                        self.lifetime(win, dot=dot) # Reposition dot at another random location
+                # Move normal dots
+                self.dotCoords = np.array(self.dotCoords) # list --> np array
+                if self.dotCoords[normal_mask][:].size != 0:
+                    self.dotCoords[normal_mask, 0] += speedComponents[0]
+                    self.dotCoords[normal_mask, 1] += speedComponents[1]
+                # Move aberrant dots 
+                if self.dotCoords[aberrant_mask][:].size != 0:
+                    self.dotCoords[aberrant_mask, 0] += aberrantComponents[0]
+                    self.dotCoords[aberrant_mask, 1] += aberrantComponents[1]
+                dots.xys = self.dotCoords.tolist() # Move the dots to their new positions                
+                dots.draw()                
                 scotomaMask.draw()
                 win.flip()
                 if self.checkQuitOrPause():
                     return
             
             # Middle bookend (if applicable)
-            print("Middle bookend: 5s") # debug
             if self.scotomaReverse:
                 #pause time before reversal
                 for f in range(self._numFramesBookend):
-                    for dot in self.dots:
-                        dot.endTime = time.perf_counter()
-                        dot.elapsedTime = dot.endTime - dot.spawnTime # seconds
-                        if (dot.elapsedTime*self._FR) >= intervalFrames:
-                            dot.lifetime(win, dot=dot) # Reposition dot at another random location
-                        dot.pos += speedComponents if not dot.aberrant else aberrantComponents
-                        dot.draw()                    
+                    self.currentFrames += 1
+                    for dot in range(self.numberOfDots):
+                        if self.currentFrames[dot] >= dotIntervalFrames[dot]:
+                            self.lifetime(win, dot=dot) # Reposition dot at another random location
+                    self.dotCoords = np.array(self.dotCoords) # list --> np array
+                    # Move normal dots
+                    if self.dotCoords[normal_mask][:].size != 0:
+                        self.dotCoords[normal_mask, 0] += speedComponents[0]
+                        self.dotCoords[normal_mask, 1] += speedComponents[1]
+                    # Move aberrant dots 
+                    if self.dotCoords[aberrant_mask][:].size != 0:
+                        self.dotCoords[aberrant_mask, 0] += aberrantComponents[0]
+                        self.dotCoords[aberrant_mask, 1] += aberrantComponents[1]
+                    dots.xys = self.dotCoords # Move the dots to their new positions                    
+                    dots.draw()                   
                     scotomaMask.draw()
                     win.flip()
-                    if self.checkQuitOrPause():
-                        return
+                if self.checkQuitOrPause():
+                    return
                 
                 #first check whether you will be adding or taking away scotomas. Assign the addColor accordingly so that when you update the mask it either places a scotoma or sets the value to transparent
                 addColor = self.scotomaOpacity if numScotomasToAdd < 0 else 0
-                print(addColor) # debug
                 #flip the scotoma sequence and scotomas to change this frame lists
-                print("decay: 15s") # debug
                 count = 0
                 for f in range(self._numFramesGrowth): 
                     scotomasToChangeThisFrame = scotomaSequenceReverse[count:count+newScotomasPerFrameReverse[f]]
                     count += newScotomasPerFrameReverse[f]
                     mask[scotomasToChangeThisFrame] = addColor
                     scotomaMask.opacities = mask
-                    for dot in self.dots:
-                        dot.endTime = time.perf_counter()
-                        dot.elapsedTime = dot.endTime - dot.spawnTime # seconds
-                        if (dot.elapsedTime*self._FR) >= intervalFrames:
-                            dot.lifetime(win, dot=dot) # Reposition dot at another random location
-                        dot.pos += speedComponents if not dot.aberrant else aberrantComponents
-                        dot.draw()                    
+                    self.currentFrames += 1
+                    for dot in range(self.numberOfDots):
+                        if self.currentFrames[dot] >= dotIntervalFrames[dot]:
+                            self.lifetime(win, dot=dot) # Reposition dot at another random location
+                    self.dotCoords = np.array(self.dotCoords) # list --> np array
+                    # Move normal dots
+                    if self.dotCoords[normal_mask][:].size != 0:
+                        self.dotCoords[normal_mask, 0] += speedComponents[0]
+                        self.dotCoords[normal_mask, 1] += speedComponents[1]
+                    # Move aberrant dots 
+                    if self.dotCoords[aberrant_mask][:].size != 0:
+                        self.dotCoords[aberrant_mask, 0] += aberrantComponents[0]
+                        self.dotCoords[aberrant_mask, 1] += aberrantComponents[1]
+                    dots.xys = self.dotCoords # Move the dots to their new positions                    
+                    dots.draw()                    
                     scotomaMask.draw()
                     win.flip()
                     if self.checkQuitOrPause():
                         return                
             
             # Last bookend
-            print("last bookend: 5s") # debug
             for f in range(self._numFramesBookend):  
+                self.currentFrames += 1
+                for dot in range(self.numberOfDots):
+                    if self.currentFrames[dot] >= dotIntervalFrames[dot]:
+                        self.lifetime(win, dot=dot) # Reposition dot at another random location
+                self.dotCoords = np.array(self.dotCoords) # list --> np array
+                # Move normal dots
+                if self.dotCoords[normal_mask][:].size != 0:
+                    self.dotCoords[normal_mask, 0] += speedComponents[0]
+                    self.dotCoords[normal_mask, 1] += speedComponents[1]
+                # Move aberrant dots 
+                if self.dotCoords[aberrant_mask][:].size != 0:
+                    self.dotCoords[aberrant_mask, 0] += aberrantComponents[0]
+                    self.dotCoords[aberrant_mask, 1] += aberrantComponents[1]
+                dots.xys = self.dotCoords # Move the dots to their new positions                    
+                dots.draw()                  
                 scotomaMask.draw()
                 win.flip()
                 if self.checkQuitOrPause():
@@ -452,14 +496,7 @@ class DirectionalDots(protocol):
             
             ## Tail time
             for f in range(self._tailTimeNumFrames):
-                print("Tail time: 3s") # debug
-                for dot in self.dots:
-                    dot.endTime = time.perf_counter()
-                    dot.elapsedTime = dot.endTime - dot.spawnTime # seconds
-                    if (dot.elapsedTime*self._FR) >= intervalFrames:
-                        dot.lifetime(win, dot=dot) # Reposition dot at another random location
-                    dot.pos += speedComponents if not dot.aberrant else aberrantComponents
-                    dot.draw()
+                dots.draw()
                 scotomaMask.draw()
                 win.flip()
                 if self.checkQuitOrPause():
