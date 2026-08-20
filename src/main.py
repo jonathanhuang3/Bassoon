@@ -725,6 +725,48 @@ class Bassoon:
             experimentFrame, var=self.timingReportSelection)
         timingReportChk.grid(row=5, column=3)
 
+        # EyeLink 3 / pylink connection (optional)
+        eyeLinkFrame = LabelFrame(editFrame, text='EyeLink', bd=6, pady=10) 
+        eyeLinkFrame.configure(font=("Helvetica", 12)) 
+        eyeLinkFrame.pack()
+
+        useEyeLinkLabel = Label(eyeLinkFrame, text='Use EyeLink', padx=10)
+        useEyeLinkLabel.grid(row=0, column=0)
+        self.useEyeLinkSelection = IntVar(root)
+        self.useEyeLinkSelection.set(self.experiment.useEyeLink == True)
+        useEyeLinkChk = Checkbutton(eyeLinkFrame, var=self.useEyeLinkSelection)
+        useEyeLinkChk.grid(row=0, column=1)
+
+        dummyEyeLinkLabel = Label(eyeLinkFrame, text='Dummy Mode (no Host PC)', padx=10)
+        dummyEyeLinkLabel.grid(row=0, column=2)
+        self.eyeLinkDummySelection = IntVar(root)
+        self.eyeLinkDummySelection.set(self.experiment.eyeLinkDummy == True)
+        dummyEyeLinkChk = Checkbutton(eyeLinkFrame, var=self.eyeLinkDummySelection)
+        dummyEyeLinkChk.grid(row=0, column=3)
+
+        eyeLinkIPLabel = Label(eyeLinkFrame, text='Host IP', padx=10)
+        eyeLinkIPLabel.grid(row=1, column=0)
+        self.eyeLinkIPSelection = StringVar(root)
+        self.eyeLinkIPSelection.set(self.experiment.eyeLinkIP)
+        eyeLinkIPEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkIPSelection, width=16)
+        eyeLinkIPEntry.grid(row=1, column=1)
+
+        eyeLinkEDFLabel = Label(eyeLinkFrame, text='EDF Name (8 chars)', padx=10)
+        eyeLinkEDFLabel.grid(row=1, column=2)
+        self.eyeLinkEDFSelection = StringVar(root)
+        self.eyeLinkEDFSelection.set(self.experiment.eyeLinkEDF)
+        eyeLinkEDFEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkEDFSelection, width=12)
+        eyeLinkEDFEntry.grid(row=1, column=3)
+
+        eyeLinkDirLabel = Label(eyeLinkFrame, text='EDF Save Folder', padx=10)
+        eyeLinkDirLabel.grid(row=2, column=0)
+        self.eyeLinkEDFDirSelection = StringVar(root)
+        self.eyeLinkEDFDirSelection.set(self.experiment.eyeLinkEDFDir)
+        eyeLinkDirEnt = Entry(eyeLinkFrame, textvariable=self.eyeLinkEDFDirSelection, width=30)
+        eyeLinkDirEnt.grid(row=2, column=1, columnspan=2)
+        eyeLinkDirBtn = Button(eyeLinkFrame, text='Browse', padx=7, command=lambda: self.findEyeLinkSaveFolder(monitorEditWindow, eyeLinkDirEnt))
+        eyeLinkDirBtn.grid(row=2, column=3)
+
         # add apply and close buttons
         buttonFrame = Frame(editFrame)
         buttonFrame.pack()
@@ -973,6 +1015,17 @@ class Bassoon:
         entry.insert(0,self.experiment.warpFileName)
 
 
+    def findEyeLinkSaveFolder(self, window, entry):
+        '''Choose the folder on this computer where downloaded EyeLink EDF files will be saved.'''
+        chosen = tkfd.askdirectory(title='Select EDF save folder')
+        if chosen == '':
+            return
+        self.experiment.eyeLinkEDFDir = chosen
+        window.attributes('-topmost', True)
+        entry.delete(0, END)
+        entry.insert(0, chosen)
+
+
     def applyExperimentChanges(self):
         ''' Execute experiment changes when the apply or apply and save button is pressed'''
         # set stimulus window
@@ -1012,6 +1065,14 @@ class Bassoon:
         self.experiment.recompileExperiment = self.recompileSelection.get() == 1
         self.experiment.timingReport = self.timingReportSelection.get()==1
 
+        self.experiment.useEyeLink = self.useEyeLinkSelection.get() == 1
+        self.experiment.eyeLinkDummy = self.eyeLinkDummySelection.get() == 1
+        ipValue = self.eyeLinkIPSelection.get().strip()
+        self.experiment.eyeLinkIP = ipValue if ipValue != '' else '100.1.1.1'
+        edfValue = self.eyeLinkEDFSelection.get().strip()
+        self.experiment.eyeLinkEDF = edfValue if edfValue != '' else 'BASS.EDF'
+        self.experiment.eyeLinkEDFDir = self.eyeLinkEDFDirSelection.get().strip()
+
         print('\n--> New experiment settings have been applied')
 
 
@@ -1042,7 +1103,12 @@ class Bassoon:
                 "useFBO": self.FBObjectSelection.get() == 1,
                 "warpFileName": self.experiment.warpFileName,
                 "timingReport": self.timingReportSelection.get()==1,
-                "recompileExperiment":self.recompileSelection.get()==1
+                "recompileExperiment":self.recompileSelection.get()==1, 
+                "useEyeLink": self.useEyeLinkSelection.get() == 1,
+                "eyeLinkDummy": self.eyeLinkDummySelection.get() == 1,
+                "eyeLinkIP": self.eyeLinkIPSelection.get().strip(),
+                "eyeLinkEDF": self.eyeLinkEDFSelection.get().strip(),
+                "eyeLinkEDFDir": self.eyeLinkEDFDirSelection.get().strip()
             }
         }
 
@@ -1343,6 +1409,7 @@ class Bassoon:
         # set wins to None type because they may still be running processes which will prevent pickling
         self.experiment.win = None
         self.experiment.informationWin = None
+        self.experiment._elTracker = None
         with open(expfname, 'wb') as f:
             pickle.dump(self.experiment, f)
 
@@ -1357,8 +1424,10 @@ class Bassoon:
         jsonfname = expfname[0:-11] + '.json'
         jsonDict = copy.deepcopy(vars(self.experiment))
         jsonDict['protocolList'] = [p[0] for p in jsonDict['protocolList']]
+        jsonDict.pop('_elTracker', None)
         for p in jsonDict['loggedStimuli']:
             p.pop('_portObj', None)
+            p.pop('_elTracker', None)
 
         
         try:  # LOOK INTO WHY THESE COMMANDS THROW AN ERROR SOMETIMES... MIGHT HAVE TO DO WITH WHEN AN EXPERIMENT IS RELOADED AFTER BEING RUN ONCE
