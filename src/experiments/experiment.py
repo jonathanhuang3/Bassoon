@@ -105,6 +105,20 @@ class experiment():
                 except:
                     print('*** Could not load all configuration settings from src/configOptions.json. Manually apply settings in the Options menu.')
 
+        self.ensureEyeLinkDefaults()
+
+    def ensureEyeLinkDefaults(self):
+        '''Back-fill EyeLink settings on older experiment objects or configs.'''
+        defaults = {
+            'useEyeLink': False,
+            'eyeLinkDummy': False,
+            'eyeLinkIP': '100.1.1.1',
+            'eyeLinkEDF': 'BASS.EDF',
+            'eyeLinkEDFDir': '',
+        }
+        for key, value in defaults.items():
+            if not hasattr(self, key):
+                setattr(self, key, value)
 
     def addProtocol(self, newProtocol):
         '''

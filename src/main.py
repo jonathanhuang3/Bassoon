@@ -524,6 +524,10 @@ class Bassoon:
         '''
         monitorEditWindow = Toplevel(root)
         monitorEditWindow.title('Edit Experiment')
+        monitorEditWindow.geometry('720x900')
+        monitorEditWindow.minsize(640, 700)
+
+        self.experiment.ensureEyeLinkDefaults()
 
         editFrame = Frame(monitorEditWindow, padx=20)
         editFrame.pack(fill="both", expand=True)
@@ -759,26 +763,28 @@ class Bassoon:
         eyeLinkEDFEntry.grid(row=1, column=3)
 
         eyeLinkDirLabel = Label(eyeLinkFrame, text='EDF Save Folder', padx=10)
-        eyeLinkDirLabel.grid(row=2, column=0)
+        eyeLinkDirLabel.grid(row=2, column=0, sticky='w')
         self.eyeLinkEDFDirSelection = StringVar(root)
         self.eyeLinkEDFDirSelection.set(self.experiment.eyeLinkEDFDir)
-        eyeLinkDirEnt = Entry(eyeLinkFrame, textvariable=self.eyeLinkEDFDirSelection, width=30)
-        eyeLinkDirEnt.grid(row=2, column=1, columnspan=2)
-        eyeLinkDirBtn = Button(eyeLinkFrame, text='Browse', padx=7, command=lambda: self.findEyeLinkSaveFolder(monitorEditWindow, eyeLinkDirEnt))
-        eyeLinkDirBtn.grid(row=2, column=3)
+        eyeLinkDirEnt = Entry(eyeLinkFrame, textvariable=self.eyeLinkEDFDirSelection, width=40)
+        eyeLinkDirEnt.grid(row=2, column=2, columnspan=2, sticky='ew')
+        eyeLinkDirBtn = Button(
+            eyeLinkFrame, text='Browse', padx=7,
+            command=lambda ent=eyeLinkDirEnt: self.findEyeLinkSaveFolder(monitorEditWindow, ent))
+        eyeLinkDirBtn.grid(row=2, column=1, sticky='w', padx=(0, 10))
+        eyeLinkFrame.columnconfigure(2, weight=1)
 
-        # add apply and close buttons
-        buttonFrame = Frame(editFrame)
+        buttonFrame = Frame(editFrame, pady=15)
         buttonFrame.pack()
         applyButton = Button(buttonFrame, text='Apply Changes',
                              command=self.applyExperimentChanges)
-        applyButton.grid(row=0, column=0, padx = 2)
+        applyButton.grid(row=0, column=0, padx=2)
         saveButton = Button(buttonFrame, text='Save & Apply Changes',
                              command=self.setConfigFile)
-        saveButton.grid(row=0, column=1, padx = 2)
+        saveButton.grid(row=0, column=1, padx=2)
         closeButton = Button(buttonFrame, text='Close Window',
-                             command=lambda: monitorEditWindow.destroy())
-        closeButton.grid(row=0, column=2)
+                             command=monitorEditWindow.destroy)
+        closeButton.grid(row=0, column=2, padx=2)
 
     def editMonitors(self):
         ''' A function to add or remove monitors from the psychopy monitor center programmatically'''
@@ -1020,6 +1026,7 @@ class Bassoon:
         chosen = tkfd.askdirectory(title='Select EDF save folder')
         if chosen == '':
             return
+        self.experiment.ensureEyeLinkDefaults()
         self.experiment.eyeLinkEDFDir = chosen
         window.attributes('-topmost', True)
         entry.delete(0, END)
@@ -1028,6 +1035,8 @@ class Bassoon:
 
     def applyExperimentChanges(self):
         ''' Execute experiment changes when the apply or apply and save button is pressed'''
+        self.experiment.ensureEyeLinkDefaults()
+
         # set stimulus window
         self.experiment.stimMonitor = self.stimMonitorSelection.get()
         self.experiment.fullscr = self.stimFullScreenSelection.get() == 1
