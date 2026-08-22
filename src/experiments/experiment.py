@@ -277,12 +277,28 @@ class experiment():
                         from EyeLinkCoreGraphicsPsychoPy import EyeLinkCoreGraphicsPsychoPy
                     except ImportError:
                         from psychopy_eyelink_coregraphics import EyeLinkCoreGraphicsPsychoPy
+                    # Targets are drawn in this PsychoPy window (stimulus PC), not on the Host monitor.
+                    try:
+                        self.win.winHandle.activate()
+                    except Exception:
+                        pass
+                    self.win.color = [-1, -1, -1]
+                    self.win.flip()
                     genv = EyeLinkCoreGraphicsPsychoPy(self._elTracker, self.win)
                     pylink.openGraphicsEx(genv)
-                    print('--> EyeLink camera setup / calibration. On the Host PC: C = calibrate, V = validate, Enter = exit.')
+                    print('--> EyeLink setup ready.')
+                    print('    Calibration DOTS appear on the STIMULUS monitor (PsychoPy window), not the Host PC.')
+                    print('    Window size: {w} x {h}  |  screen #: {s}  |  fullscreen: {f}'.format(
+                        w=int(scn_w), h=int(scn_h), s=self.screen, f=self.fullscr))
+                    print('    On Host PC: Enter = camera setup, C = calibrate, V = validate, Enter/Esc = exit setup.')
+                    if not self.fullscr:
+                        print('*** TIP: Turn on Full Screen in Options so calibration targets are not hidden behind Bassoon.')
                     self._elTracker.doTrackerSetup()
+                    self.win.flip()
                 except Exception as calErr:
-                    print('*** EyeLink connected, but calibration graphics failed (' + str(calErr) + '). Recording will continue without doTrackerSetup().')
+                    print('*** EyeLink connected, but calibration graphics failed (' + str(calErr) + ').')
+                    print('*** Install psychopy-eyelink-coregraphics (or place EyeLinkCoreGraphicsPsychoPy.py on PYTHONPATH).')
+                    print('*** Recording will continue without doTrackerSetup().')
 
             self._elTracker.setOfflineMode()
             pylink.pumpDelay(100)
