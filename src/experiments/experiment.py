@@ -238,7 +238,29 @@ class experiment():
             print('***WARNING: EyeLink message failed:', text)
 
 
-    def startEyeLink(self):
+    def _hideBassoonForEyeLinkSetup(self, gui_root):
+        '''Hide the Bassoon Tk window so EyeLink calibration can draw on the stimulus screen.'''
+        if gui_root is None:
+            return
+        try:
+            gui_root.withdraw()
+            gui_root.update_idletasks()
+            gui_root.update()
+        except Exception:
+            pass
+
+    def _focusStimulusWindow(self):
+        '''Bring the PsychoPy stimulus window to the front before EyeLink setup.'''
+        try:
+            self.win.winHandle.activate()
+        except Exception:
+            pass
+        try:
+            self.win.winHandle.set_visible(True)
+        except Exception:
+            pass
+
+    def startEyeLink(self, gui_root=None):
         '''
         Connect to EyeLink, open an EDF, optionally calibrate, and start recording.
         Failures print to the console and leave _elTracker as None so stimuli still run.
@@ -278,10 +300,6 @@ class experiment():
                     except ImportError:
                         from psychopy_eyelink_coregraphics import EyeLinkCoreGraphicsPsychoPy
                     # Targets are drawn in this PsychoPy window (stimulus PC), not on the Host monitor.
-                    try:
-                        self.win.winHandle.activate()
-                    except Exception:
-                        pass
                     self.win.color = [-1, -1, -1]
                     self.win.flip()
                     genv = EyeLinkCoreGraphicsPsychoPy(self._elTracker, self.win)
@@ -293,7 +311,10 @@ class experiment():
                     print('    On Host PC: Enter = camera setup, C = calibrate, V = validate, Enter/Esc = exit setup.')
                     if not self.fullscr:
                         print('*** TIP: Turn on Full Screen in Options so calibration targets are not hidden behind Bassoon.')
+                    self._hideBassoonForEyeLinkSetup(gui_root)
+                    self._focusStimulusWindow()
                     self._elTracker.doTrackerSetup()
+                    self._focusStimulusWindow()
                     self.win.flip()
                 except Exception as calErr:
                     print('*** EyeLink connected, but calibration graphics failed (' + str(calErr) + ').')
@@ -370,7 +391,7 @@ class experiment():
 
 
 
-    def activate(self):
+    def activate(self, gui_root=None):
         '''
         Begin the experiment
         '''
@@ -414,7 +435,7 @@ class experiment():
 
         self.activated = True
         self.loggedStimuli = [] #always resets on a new run
-        self.startEyeLink()
+        self.startEyeLink(gui_root=gui_root)
         try:
             self._runProtocolLoop()
         finally:

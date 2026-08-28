@@ -1479,7 +1479,7 @@ class Bassoon:
         print('--> Experiment is now live! If available, use the information window for further assistance. Good luck.')
 
         self.experiment.experimentStartTime = datetime.now()  # write down start time
-        self.experiment.activate()  # run the experiment
+        self.experiment.activate(gui_root=root)  # run the experiment
         self.experiment.experimentEndTime = datetime.now()  # write down end time
 
         try:
