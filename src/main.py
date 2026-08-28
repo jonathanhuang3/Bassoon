@@ -33,6 +33,10 @@ import time
 import copy
 import random
 
+# Set the working directory to the directory of this script
+SRC_DIR = Path(__file__).resolve().parent
+os.chdir(SRC_DIR)
+
 # Each protocol subclass must be imported here:
 from experiments.experiment import experiment
 from protocols.protocol import protocol
@@ -1475,13 +1479,20 @@ class Bassoon:
         print(' \n--> Preparing to run experiment. Bassoon will become tacet.')
 
         root.withdraw()  #hide bassoon while the experiment is running
+        root.update_idletasks()
+        root.update()
         print('--> Tacet!')
         print('--> Experiment is now live! If available, use the information window for further assistance. Good luck.')
+
+        self.runExperimentButton.config(state=DISABLED)
 
         self.experiment.experimentStartTime = datetime.now()  # write down start time
         self.experiment.activate(gui_root=root)  # run the experiment
         self.experiment.experimentEndTime = datetime.now()  # write down end time
+        self._finishExperimentRun()
 
+    def _finishExperimentRun(self):
+        '''Save results and restore the Bassoon GUI after an experiment run.'''
         try:
             print('\n--> The experiment has ended. Please save.')
             # pass recompile = False becasue you want to save the experiment that you just ran, not a new one
@@ -1493,6 +1504,7 @@ class Bassoon:
                   '\n--> Alternatively, the experiment object is located at app.experiment. However, this object may not be immediately pickalable without invoking \'app.experiment.win = None\' and \'app.experiment.informationWin = None\'')
 
         print('\n\nBassoon is ready to play again!')
+        self.runExperimentButton.config(state=NORMAL)
         root.deiconify()
 
     def onClosing(self):
