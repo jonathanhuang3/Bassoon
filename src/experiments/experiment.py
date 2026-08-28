@@ -374,8 +374,12 @@ class experiment():
         '''
         Begin the experiment
         '''
+        # Tkinter (Bassoon GUI) and PsychoPy both use GUI event loops; disable PsychoPy
+        # GUI integration during EyeLink calibration so cal targets can redraw on the stimulus window.
+        allowGui = self.allowGUI and not self.useEyeLink
+
         self.win = visual.Window(
-                    allowGUI = self.allowGUI,
+                    allowGUI = allowGui,
                     monitor = self.stimMonitor,
                     screen = self.screen,
                     fullscr = self.fullscr,
@@ -399,7 +403,7 @@ class experiment():
         #the flips to this second window must be called in the stimulus protocol itself
         if self.useInformationMonitor:
             self.informationWin = visual.Window(
-                        allowGUI = self.allowGUI,
+                        allowGUI = allowGui,
                         monitor = self.informationMonitor,
                         screen = self.informationScreen,
                         color = self.backgroundColor,
