@@ -8,8 +8,56 @@ from psychopy import core, visual, data, event, monitors
 from psychopy.visual.windowwarp import Warper
 import serial
 import json
+import re
+import platform
 from pathlib import Path
 from datetime import datetime
+
+
+def _loadEyeLinkCoreGraphics():
+    try:
+        from EyeLinkCoreGraphicsPsychoPy import EyeLinkCoreGraphicsPsychoPy
+    except ImportError:
+        from psychopy_eyelink_coregraphics import EyeLinkCoreGraphicsPsychoPy
+    return EyeLinkCoreGraphicsPsychoPy
+
+
+class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
+    '''EyeLink graphics with visible defaults and GUI event pumping for Bassoon.'''
+
+    def __init__(self, tracker, win, gui_root=None):
+        super().__init__(tracker, win, disableAudio=True)
+        self._gui_root = gui_root
+        # Built-in defaults are black-on-black until the Host sends colors.
+        bg = list(win.color) if hasattr(win.color, '__len__') else [-1, -1, -1]
+        self.setCalibrationColors([1, 1, 1], bg)
+        self.update_cal_target()
+
+    def _pumpGuiEvents(self):
+        if self._gui_root is not None:
+            try:
+                self._gui_root.update_idletasks()
+                self._gui_root.update()
+            except Exception:
+                pass
+        try:
+            core.wait(0.001, hogCPUInterval=0.001)
+        except Exception:
+            pass
+
+    def get_input_key(self):
+        self._pumpGuiEvents()
+        return super().get_input_key()
+
+    def draw_cal_target(self, x, y):
+        fg = self.getForegroundColor()
+        if fg in ('black', 'Black', [-1, -1, -1], (0, 0, 0)):
+            self.setCalibrationColors([1, 1, 1], self.getBackgroundColor())
+            self.update_cal_target()
+        print('--> EyeLink calibration target at ({x}, {y})'.format(
+            x=int(x), y=int(y)))
+        super().draw_cal_target(x, y)
+
 
 class experiment():
     def __init__(self):
@@ -61,6 +109,8 @@ class experiment():
         self.eyeLinkEDF = 'BASS.EDF' # Host filename, 8 chars + .EDF
         self.eyeLinkEDFDir = '' # folder on the Bassoon PC for downloaded EDFs; empty means current working directory
         self._elTracker = None
+        self._eyeLinkSessionStamp = None
+        self._eyeLinkCalibrationJsonPath = None
         
         #Load previously saved experimental settings from configOptions.json
         if Path('configOptions.json').is_file():
@@ -226,6 +276,20 @@ class experiment():
         return saveDir
 
 
+    def _eyeLinkSessionBasename(self):
+        '''Shared base filename for the downloaded EDF and its calibration JSON.'''
+        stamp = self._eyeLinkSessionStamp or datetime.now().strftime('%Y%m%d_%H%M%S')
+        return Path(self.eyeLinkEDF).stem + '_' + stamp
+
+
+    def _eyeLinkLocalEdfPath(self):
+        return self._resolveEyeLinkSaveDir() / (self._eyeLinkSessionBasename() + '.edf')
+
+
+    def _eyeLinkLocalCalibrationJsonPath(self):
+        return self._resolveEyeLinkSaveDir() / (self._eyeLinkSessionBasename() + '_calibration.json')
+
+
     def sendEyeLinkMessage(self, text):
         '''
         Send a timestamped message to the open EDF. No-op if EyeLink is not connected.
@@ -236,6 +300,327 @@ class experiment():
             self._elTracker.sendMessage(str(text)[:120])
         except Exception:
             print('***WARNING: EyeLink message failed:', text)
+
+
+    def _decodeEyeLinkCalibrationResult(self, resultCode):
+        '''Map pylink getCalibrationResult() codes to a readable label.'''
+        labels = {
+            0: 'OK',
+            1: 'POOR_CALIBRATION_OR_HIGH_VALIDATION_ERROR',
+            -1: 'FAILED',
+            27: 'ABORTED',
+            1000: 'NO_REPLY',
+        }
+        return labels.get(resultCode, 'UNKNOWN')
+
+
+    def _decodeEyeUsed(self, eyeCode):
+        '''Map pylink getEyeUsed() codes to a readable label.'''
+        labels = {
+            0: 'LEFT',
+            1: 'RIGHT',
+            2: 'BINOCULAR',
+            -1: 'NONE',
+        }
+        return labels.get(eyeCode, 'UNKNOWN')
+
+
+    def _parseEyeLinkEyeMetrics(self, values):
+        '''
+        Parse one eye's numeric fields from an EyeLink validation_result message.
+        EyeLink typically reports average error, max error, and a third auxiliary value.
+        '''
+        if not values:
+            return {}
+
+        metrics = {}
+        if len(values) >= 1:
+            metrics['averageErrorDegrees'] = values[0]
+        if len(values) >= 2:
+            metrics['maxErrorDegrees'] = values[1]
+        if len(values) >= 3:
+            metrics['auxValue'] = values[2]
+        return metrics
+
+
+    def _parseEyeLinkCalibrationMessage(self, message):
+        '''
+        Extract per-eye and summary error values in degrees from EyeLink cal/validation messages.
+        Returns a dict with parsed values when found.
+        '''
+        parsed = {}
+        if not message:
+            return parsed
+
+        resultMatch = re.search(
+            r'(?P<type>validation_result|calibration_result)\s*:\s*(?P<values>[-0-9.\s]+)',
+            message,
+            re.IGNORECASE,
+        )
+        if resultMatch:
+            resultType = resultMatch.group('type').lower()
+            values = [
+                float(v) for v in resultMatch.group('values').split()
+                if v.strip() != ''
+            ]
+            parsed['resultType'] = resultType
+
+            if len(values) >= 6:
+                parsed['eyes'] = {
+                    'left': self._parseEyeLinkEyeMetrics(values[0:3]),
+                    'right': self._parseEyeLinkEyeMetrics(values[3:6]),
+                }
+            elif len(values) >= 3:
+                parsed['eyes'] = {
+                    'left': self._parseEyeLinkEyeMetrics(values[0:3]),
+                }
+
+            eyeMetrics = parsed.get('eyes', {})
+            avgErrors = [
+                eye['averageErrorDegrees']
+                for eye in eyeMetrics.values()
+                if 'averageErrorDegrees' in eye
+            ]
+            maxErrors = [
+                eye['maxErrorDegrees']
+                for eye in eyeMetrics.values()
+                if 'maxErrorDegrees' in eye and eye['maxErrorDegrees'] > 0
+            ]
+            if avgErrors:
+                parsed['averageErrorDegrees'] = sum(avgErrors) / len(avgErrors)
+            if maxErrors:
+                parsed['maxErrorDegrees'] = max(maxErrors)
+            elif avgErrors:
+                parsed['maxErrorDegrees'] = max(avgErrors)
+
+            return parsed
+
+        avgMatch = re.search(
+            r'(?:average|avg\.?)\s+error[^0-9\-]*([0-9]*\.?[0-9]+)\s*(?:deg|degrees?)',
+            message,
+            re.IGNORECASE,
+        )
+        if avgMatch:
+            parsed['averageErrorDegrees'] = float(avgMatch.group(1))
+
+        maxMatch = re.search(
+            r'max(?:imum)?\.?\s+error[^0-9\-]*([0-9]*\.?[0-9]+)\s*(?:deg|degrees?)',
+            message,
+            re.IGNORECASE,
+        )
+        if maxMatch:
+            parsed['maxErrorDegrees'] = float(maxMatch.group(1))
+
+        return parsed
+
+
+    _VALIDATE_POINT_RE = re.compile(
+        r'VALIDATE\s+'
+        r'(?:(?:LR|[LR])\s+)?'
+        r'(?:\d+POINT\s+)?'
+        r'POINT\s+(?P<point>\d+)\s+'
+        r'(?P<eye>LEFT|RIGHT)\s+'
+        r'at\s+(?P<x>\d+),(?P<y>\d+)\s+'
+        r'OFFSET\s+(?P<error>[-\d.]+)\s+deg\.'
+        r'(?:\s+(?P<pix_x>[-\d.]+),(?P<pix_y>[-\d.]+)\s+pix\.)?',
+        re.IGNORECASE,
+    )
+    _CAL_VALIDATION_SUMMARY_RE = re.compile(
+        r'!CAL VALIDATION\s+(?P<model>HV\d+|H\d+\w*)\s+(?P<eye_code>[LR]+)\s+(?P<eye>LEFT|RIGHT)\s+'
+        r'(?P<status>\w+)\s+ERROR\s+(?P<avg>[-\d.]+)\s+avg\.\s+(?P<max>[-\d.]+)\s+max',
+        re.IGNORECASE,
+    )
+
+
+    def _parseValidationPointsFromEdfText(self, edfText):
+        '''
+        Parse per-point validation errors from EyeLink message text embedded in an EDF.
+        Returns validation point lists grouped by eye and any validation summaries found.
+        '''
+        validationPoints = {'left': [], 'right': []}
+        validationSummaries = {'left': [], 'right': []}
+        calibrationModels = []
+
+        for match in self._VALIDATE_POINT_RE.finditer(edfText):
+            eyeKey = match.group('eye').lower()
+            point = {
+                'point': int(match.group('point')),
+                'x': int(match.group('x')),
+                'y': int(match.group('y')),
+                'errorDegrees': float(match.group('error')),
+            }
+            if match.group('pix_x') is not None and match.group('pix_y') is not None:
+                point['offsetPixels'] = {
+                    'x': float(match.group('pix_x')),
+                    'y': float(match.group('pix_y')),
+                }
+            validationPoints.setdefault(eyeKey, []).append(point)
+
+        for eyeKey in validationPoints:
+            validationPoints[eyeKey].sort(key=lambda item: item['point'])
+
+        for match in self._CAL_VALIDATION_SUMMARY_RE.finditer(edfText):
+            eyeKey = match.group('eye').lower()
+            model = match.group('model').upper()
+            if model not in calibrationModels:
+                calibrationModels.append(model)
+            validationSummaries.setdefault(eyeKey, []).append({
+                'calibrationModel': model,
+                'status': match.group('status').upper(),
+                'averageErrorDegrees': float(match.group('avg')),
+                'maxErrorDegrees': float(match.group('max')),
+            })
+
+        parsed = {}
+        if any(validationPoints.values()):
+            parsed['validationPoints'] = validationPoints
+        if validationSummaries:
+            parsed['validationSummaries'] = validationSummaries
+        if calibrationModels:
+            parsed['calibrationModels'] = calibrationModels
+            parsed['calibrationModel'] = calibrationModels[-1]
+        return parsed
+
+
+    def _parseValidationPointsFromEdf(self, edfPath):
+        '''Read an EDF file and extract per-point validation data from embedded messages.'''
+        edfPath = Path(edfPath)
+        if not edfPath.is_file():
+            return {}
+
+        try:
+            edfText = edfPath.read_bytes().decode('latin-1', errors='ignore')
+        except Exception as e:
+            print('*** Could not read EDF for validation points (' + str(e) + ').')
+            return {}
+
+        return self._parseValidationPointsFromEdfText(edfText)
+
+
+    def _updateEyeLinkCalibrationJsonFromEdf(self, edfPath):
+        '''Merge per-point validation data from the downloaded EDF into the session JSON file.'''
+        if not self._eyeLinkCalibrationJsonPath:
+            return None
+
+        jsonPath = Path(self._eyeLinkCalibrationJsonPath)
+        if not jsonPath.is_file():
+            return None
+
+        pointData = self._parseValidationPointsFromEdf(edfPath)
+        if not pointData:
+            return jsonPath
+
+        try:
+            with open(jsonPath, 'r', encoding='utf-8') as f:
+                record = json.load(f)
+            record.update(pointData)
+            record['edfParsedForValidationPoints'] = True
+            with open(jsonPath, 'w', encoding='utf-8') as f:
+                json.dump(record, f, indent=2)
+            print('--> Updated EyeLink calibration JSON with per-point validation data')
+            if 'validationPoints' in pointData:
+                for eyeName, points in pointData['validationPoints'].items():
+                    print('    {eye}: {n} validation point(s)'.format(
+                        eye=eyeName, n=len(points)))
+            return jsonPath
+        except Exception as e:
+            print('*** Could not update EyeLink calibration JSON from EDF (' + str(e) + ').')
+            return None
+
+
+    def _saveEyeLinkCalibrationJson(self, edfName, scn_w, scn_h):
+        '''
+        Save the last EyeLink calibration/validation result to a JSON file in the EDF save folder.
+        '''
+        if self._elTracker is None:
+            return None
+
+        try:
+            resultCode = self._elTracker.getCalibrationResult()
+            message = str(self._elTracker.getCalibrationMessage()).strip()
+        except Exception as e:
+            print('*** Could not read EyeLink calibration results (' + str(e) + ').')
+            return None
+
+        resultLabel = self._decodeEyeLinkCalibrationResult(resultCode)
+        parsed = self._parseEyeLinkCalibrationMessage(message)
+        try:
+            eyeUsedCode = self._elTracker.getEyeUsed()
+        except Exception:
+            eyeUsedCode = -1
+        eyeRecording = self._decodeEyeUsed(eyeUsedCode)
+
+        jsonName = self._eyeLinkLocalCalibrationJsonPath()
+        localEdfName = self._eyeLinkLocalEdfPath().name
+
+        record = {
+            'timestamp': datetime.now().isoformat(timespec='seconds'),
+            'edfName': edfName,
+            'localEdfFile': localEdfName,
+            'hostIP': self.eyeLinkIP,
+            'dummyMode': self.eyeLinkDummy,
+            'eyeRecording': eyeRecording,
+            'eyeUsedCode': eyeUsedCode,
+            'display': {
+                'width': int(scn_w),
+                'height': int(scn_h),
+                'screen': self.screen,
+                'fullscreen': self.fullscr,
+            },
+            'resultCode': resultCode,
+            'resultLabel': resultLabel,
+            'message': message,
+            'success': resultCode == 0 or 'averageErrorDegrees' in parsed,
+        }
+        record.update(parsed)
+
+        try:
+            with open(jsonName, 'w', encoding='utf-8') as f:
+                json.dump(record, f, indent=2)
+            self._eyeLinkCalibrationJsonPath = jsonName
+            print('--> EyeLink calibration/validation saved to', jsonName)
+            print('    Paired EDF will download as', localEdfName)
+            if message:
+                print('    ' + message)
+            elif resultLabel == 'NO_REPLY':
+                print('    No calibration/validation result was returned. Run validation (V) before exiting setup.')
+            if 'eyes' in parsed:
+                for eyeName, metrics in parsed['eyes'].items():
+                    if 'averageErrorDegrees' in metrics:
+                        print('    {eye} eye average error: {v:.2f} deg'.format(
+                            eye=eyeName, v=metrics['averageErrorDegrees']))
+            if eyeRecording != 'UNKNOWN':
+                print('    Eye recording mode:', eyeRecording)
+            self.sendEyeLinkMessage(
+                '!V TRIAL_VAR cal_result {label}'.format(label=resultLabel.replace(' ', '_'))
+            )
+            self.sendEyeLinkMessage(
+                '!V TRIAL_VAR eye_recording {mode}'.format(mode=eyeRecording.replace(' ', '_'))
+            )
+            if 'averageErrorDegrees' in parsed:
+                self.sendEyeLinkMessage(
+                    '!V TRIAL_VAR cal_avg_error_deg {v}'.format(v=parsed['averageErrorDegrees'])
+                )
+            if 'maxErrorDegrees' in parsed:
+                self.sendEyeLinkMessage(
+                    '!V TRIAL_VAR cal_max_error_deg {v}'.format(v=parsed['maxErrorDegrees'])
+                )
+            if 'eyes' in parsed:
+                for eyeName, metrics in parsed['eyes'].items():
+                    if 'averageErrorDegrees' in metrics:
+                        self.sendEyeLinkMessage(
+                            '!V TRIAL_VAR cal_{eye}_avg_error_deg {v}'.format(
+                                eye=eyeName, v=metrics['averageErrorDegrees'])
+                        )
+                    if 'maxErrorDegrees' in metrics and metrics['maxErrorDegrees'] > 0:
+                        self.sendEyeLinkMessage(
+                            '!V TRIAL_VAR cal_{eye}_max_error_deg {v}'.format(
+                                eye=eyeName, v=metrics['maxErrorDegrees'])
+                        )
+            return jsonName
+        except Exception as e:
+            print('*** Could not save EyeLink calibration JSON (' + str(e) + ').')
+            return None
 
 
     def _hideBassoonForEyeLinkSetup(self, gui_root):
@@ -259,6 +644,13 @@ class experiment():
             self.win.winHandle.set_visible(True)
         except Exception:
             pass
+        if platform.system() == 'Windows':
+            try:
+                import ctypes
+                hwnd = self.win.winHandle._hwnd
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
 
     def startEyeLink(self, gui_root=None):
         '''
@@ -266,6 +658,8 @@ class experiment():
         Failures print to the console and leave _elTracker as None so stimuli still run.
         '''
         self._elTracker = None
+        self._eyeLinkSessionStamp = None
+        self._eyeLinkCalibrationJsonPath = None
         if not self.useEyeLink:
             return
 
@@ -282,6 +676,7 @@ class experiment():
         try:
             print('--> Connecting to EyeLink at', 'dummy' if linkAddress is None else linkAddress)
             self._elTracker = pylink.EyeLink(linkAddress)
+            self._eyeLinkSessionStamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             self._elTracker.openDataFile(edfName)
             self._elTracker.sendCommand("add_file_preamble_text 'RECORDED BY BASSOON'")
 
@@ -295,14 +690,10 @@ class experiment():
 
             if not self.eyeLinkDummy:
                 try:
-                    try:
-                        from EyeLinkCoreGraphicsPsychoPy import EyeLinkCoreGraphicsPsychoPy
-                    except ImportError:
-                        from psychopy_eyelink_coregraphics import EyeLinkCoreGraphicsPsychoPy
                     # Targets are drawn in this PsychoPy window (stimulus PC), not on the Host monitor.
                     self.win.color = [-1, -1, -1]
                     self.win.flip()
-                    genv = EyeLinkCoreGraphicsPsychoPy(self._elTracker, self.win)
+                    genv = _BassoonEyeLinkGraphics(self._elTracker, self.win, gui_root=gui_root)
                     pylink.openGraphicsEx(genv)
                     print('--> EyeLink setup ready.')
                     print('    Calibration DOTS appear on the STIMULUS monitor (PsychoPy window), not the Host PC.')
@@ -316,6 +707,7 @@ class experiment():
                     self._elTracker.doTrackerSetup()
                     self._focusStimulusWindow()
                     self.win.flip()
+                    self._saveEyeLinkCalibrationJson(edfName, scn_w, scn_h)
                 except Exception as calErr:
                     print('*** EyeLink connected, but calibration graphics failed (' + str(calErr) + ').')
                     print('*** Install psychopy-eyelink-coregraphics (or place EyeLinkCoreGraphicsPsychoPy.py on PYTHONPATH).')
@@ -368,12 +760,11 @@ class experiment():
                 pass
 
             if not self.eyeLinkDummy:
-                stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                saveDir = self._resolveEyeLinkSaveDir()
-                localName = saveDir / (Path(self.eyeLinkEDF).stem + '_' + stamp + '.edf')
+                localName = self._eyeLinkLocalEdfPath()
                 try:
                     print('--> Downloading EDF to', localName)
                     self._elTracker.receiveDataFile(self.eyeLinkEDF, str(localName))
+                    self._updateEyeLinkCalibrationJsonFromEdf(localName)
                 except Exception as e:
                     print('*** EyeLink recording finished, but the EDF could not be downloaded (' + str(e) + '). Copy it from the Host PC if needed.')
             try:
@@ -388,6 +779,8 @@ class experiment():
             print('--> EyeLink disconnected')
         finally:
             self._elTracker = None
+            self._eyeLinkSessionStamp = None
+            self._eyeLinkCalibrationJsonPath = None
 
 
 
@@ -407,10 +800,16 @@ class experiment():
                     color = self.backgroundColor,
                     units = self.units,
                     useFBO = self.useFBO,
-                    allowStencil = self.allowStencil
+                    allowStencil = self.allowStencil,
+                    checkTiming = not self.useEyeLink,
                     )
 
-        self.FR = self.win.getActualFrameRate() #log the frame rate of the stimulus window
+        # When EyeLink is enabled, skip frame-rate measurement until protocols run.
+        # PsychoPy otherwise shows "Attempting to measure frame rate..." during Window().
+        if not self.useEyeLink:
+            self.FR = self.win.getActualFrameRate() #log the frame rate of the stimulus window
+        else:
+            self.FR = 0
 
         #set a warper if you want to morph the stimulus
         if self.useFBO:
@@ -430,6 +829,7 @@ class experiment():
                         color = self.backgroundColor,
                         fullscr = self.informationFullScreen,
                         units = self.units,
+                        checkTiming = not self.useEyeLink,
                         )
 
 
