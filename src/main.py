@@ -58,6 +58,7 @@ from protocols.Flicker import Flicker
 from protocols.SumOfSinesOscillation import SumOfSinesOscillation
 from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
+from protocols.ContrastDots import ContrastDots
 
 class Bassoon:
     def __init__(self, master):
