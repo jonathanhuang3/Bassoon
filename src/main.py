@@ -39,6 +39,7 @@ os.chdir(SRC_DIR)
 
 # Each protocol subclass must be imported here:
 from experiments.experiment import experiment
+from bassoonMonitors import ensure_bassoon_monitors
 from protocols.protocol import protocol
 from protocols.Flash import Flash
 from protocols.Pause import Pause
@@ -68,6 +69,7 @@ class Bassoon:
         
         # initialize the experiment
         self.experiment = experiment()
+        ensure_bassoon_monitors(screen_index=self.experiment.screen)
 
         # create mainframe and menu
         self.frame = Frame(master)

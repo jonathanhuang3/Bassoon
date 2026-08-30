@@ -6,10 +6,13 @@ Created on Fri Jul  9 17:24:12 2021
 """
 from psychopy import core, visual, data, event, monitors
 from psychopy.visual.windowwarp import Warper
+import os
 import serial
 import json
 import re
 import platform
+import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -108,6 +111,8 @@ class experiment():
         self.eyeLinkIP = '100.1.1.1' # Host PC address on the dedicated Ethernet link
         self.eyeLinkEDF = 'BASS.EDF' # Host filename, 8 chars + .EDF
         self.eyeLinkEDFDir = '' # folder on the Bassoon PC for downloaded EDFs; empty means current working directory
+        self.eyeLinkEdf2AscPath = '' # optional full path to edf2asc.exe; empty means auto-detect
+        self.eyeLinkWriteAsc = True # convert downloaded EDF to ASC after each EyeLink session
         self._elTracker = None
         self._eyeLinkSessionStamp = None
         self._eyeLinkCalibrationJsonPath = None
@@ -152,6 +157,8 @@ class experiment():
                     self.eyeLinkIP = configOptions['experiment'].get('eyeLinkIP', '100.1.1.1')
                     self.eyeLinkEDF = configOptions['experiment'].get('eyeLinkEDF', 'BASS.EDF')
                     self.eyeLinkEDFDir = configOptions['experiment'].get('eyeLinkEDFDir', '')
+                    self.eyeLinkEdf2AscPath = configOptions['experiment'].get('eyeLinkEdf2AscPath', '')
+                    self.eyeLinkWriteAsc = configOptions['experiment'].get('eyeLinkWriteAsc', True)
                 except:
                     print('*** Could not load all configuration settings from src/configOptions.json. Manually apply settings in the Options menu.')
 
@@ -165,6 +172,8 @@ class experiment():
             'eyeLinkIP': '100.1.1.1',
             'eyeLinkEDF': 'BASS.EDF',
             'eyeLinkEDFDir': '',
+            'eyeLinkEdf2AscPath': '',
+            'eyeLinkWriteAsc': True,
         }
         for key, value in defaults.items():
             if not hasattr(self, key):
@@ -288,6 +297,104 @@ class experiment():
 
     def _eyeLinkLocalCalibrationJsonPath(self):
         return self._resolveEyeLinkSaveDir() / (self._eyeLinkSessionBasename() + '_calibration.json')
+
+
+    def _eyeLinkLocalAscPath(self, edf_path=None):
+        if edf_path is None:
+            edf_path = self._eyeLinkLocalEdfPath()
+        else:
+            edf_path = Path(edf_path)
+        return edf_path.with_suffix('.asc')
+
+
+    def _findEdf2AscExecutable(self):
+        '''Locate SR Research edf2asc, using an explicit path or common install locations.'''
+        requested = str(getattr(self, 'eyeLinkEdf2AscPath', '')).strip()
+        if requested:
+            path = Path(requested).expanduser()
+            if path.is_file():
+                return path
+            print('*** EDF2ASC path is not a file:', path)
+
+        if os.name == 'nt':
+            for env_name in ('ProgramFiles(x86)', 'ProgramFiles'):
+                base = os.environ.get(env_name)
+                if not base:
+                    continue
+                candidates = [
+                    Path(base) / 'SR Research' / 'EyeLink' / 'bin' / 'edf2asc.exe',
+                    Path(base) / 'SR Research' / 'EyeLink' / 'EDF2ASC' / 'edf2asc.exe',
+                    Path(base) / 'SR Research' / 'EyeLink' / 'edf2asc.exe',
+                    Path(base) / 'EyeLink' / 'edf2asc.exe',
+                ]
+                for candidate in candidates:
+                    if candidate.is_file():
+                        return candidate
+
+        for name in ('edf2asc', 'EDF2ASC', 'edf2asc.exe', 'EDF2ASC.exe'):
+            found = shutil.which(name)
+            if found:
+                return Path(found)
+        return None
+
+
+    def _convertEyeLinkEdfToAsc(self, edf_path):
+        '''Convert a downloaded EDF to ASC using the EyeLink Developers Kit edf2asc tool.'''
+        if not getattr(self, 'eyeLinkWriteAsc', True):
+            return None
+
+        edf_path = Path(edf_path)
+        if not edf_path.is_file():
+            return None
+
+        edf2asc = self._findEdf2AscExecutable()
+        if edf2asc is None:
+            print('*** EDF2ASC not found. Install the EyeLink Developers Kit or set eyeLinkEdf2AscPath in configOptions.json.')
+            return None
+
+        asc_path = self._eyeLinkLocalAscPath(edf_path)
+        # Default output includes samples, events, and messages. Do not use -e
+        # (events only) or -m (parsed as -miss, not messages).
+        command = [str(edf2asc), '-y', str(edf_path)]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                cwd=str(edf2asc.parent),
+            )
+        except Exception as e:
+            print('*** Could not run EDF2ASC (' + str(e) + ').')
+            return None
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or '').strip()
+            print('*** EDF2ASC failed (' + str(result.returncode) + ').', detail)
+            return None
+        if not asc_path.is_file():
+            print('*** EDF2ASC finished but ASC file was not created:', asc_path)
+            return None
+
+        print('--> Wrote ASC to', asc_path)
+        return asc_path
+
+
+    def _updateEyeLinkCalibrationJsonAscPath(self, asc_path):
+        if not self._eyeLinkCalibrationJsonPath:
+            return
+
+        json_path = Path(self._eyeLinkCalibrationJsonPath)
+        if not json_path.is_file():
+            return
+
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                record = json.load(f)
+            record['localAscFile'] = Path(asc_path).name
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(record, f, indent=2)
+        except Exception as e:
+            print('*** Could not update calibration JSON with ASC filename (' + str(e) + ').')
 
 
     def sendEyeLinkMessage(self, text):
@@ -497,6 +604,23 @@ class experiment():
         return self._parseValidationPointsFromEdfText(edfText)
 
 
+    def _printEyeLinkValidationPoints(self, validation_points):
+        if not validation_points:
+            return
+
+        for eye_name, points in validation_points.items():
+            for point in points:
+                print(
+                    '    {eye} point {n}: {error:.2f} deg at ({x}, {y})'.format(
+                        eye=eye_name,
+                        n=point['point'],
+                        error=point['errorDegrees'],
+                        x=point['x'],
+                        y=point['y'],
+                    )
+                )
+
+
     def _updateEyeLinkCalibrationJsonFromEdf(self, edfPath):
         '''Merge per-point validation data from the downloaded EDF into the session JSON file.'''
         if not self._eyeLinkCalibrationJsonPath:
@@ -514,14 +638,13 @@ class experiment():
             with open(jsonPath, 'r', encoding='utf-8') as f:
                 record = json.load(f)
             record.update(pointData)
+            record['validationPointsSource'] = 'edf'
             record['edfParsedForValidationPoints'] = True
             with open(jsonPath, 'w', encoding='utf-8') as f:
                 json.dump(record, f, indent=2)
             print('--> Updated EyeLink calibration JSON with per-point validation data')
             if 'validationPoints' in pointData:
-                for eyeName, points in pointData['validationPoints'].items():
-                    print('    {eye}: {n} validation point(s)'.format(
-                        eye=eyeName, n=len(points)))
+                self._printEyeLinkValidationPoints(pointData['validationPoints'])
             return jsonPath
         except Exception as e:
             print('*** Could not update EyeLink calibration JSON from EDF (' + str(e) + ').')
@@ -552,11 +675,13 @@ class experiment():
 
         jsonName = self._eyeLinkLocalCalibrationJsonPath()
         localEdfName = self._eyeLinkLocalEdfPath().name
+        localAscName = self._eyeLinkLocalAscPath().name
 
         record = {
             'timestamp': datetime.now().isoformat(timespec='seconds'),
             'edfName': edfName,
             'localEdfFile': localEdfName,
+            'localAscFile': localAscName,
             'hostIP': self.eyeLinkIP,
             'dummyMode': self.eyeLinkDummy,
             'eyeRecording': eyeRecording,
@@ -693,7 +818,11 @@ class experiment():
                     # Targets are drawn in this PsychoPy window (stimulus PC), not on the Host monitor.
                     self.win.color = [-1, -1, -1]
                     self.win.flip()
-                    genv = _BassoonEyeLinkGraphics(self._elTracker, self.win, gui_root=gui_root)
+                    genv = _BassoonEyeLinkGraphics(
+                        self._elTracker,
+                        self.win,
+                        gui_root=gui_root,
+                    )
                     pylink.openGraphicsEx(genv)
                     print('--> EyeLink setup ready.')
                     print('    Calibration DOTS appear on the STIMULUS monitor (PsychoPy window), not the Host PC.')
@@ -765,6 +894,9 @@ class experiment():
                     print('--> Downloading EDF to', localName)
                     self._elTracker.receiveDataFile(self.eyeLinkEDF, str(localName))
                     self._updateEyeLinkCalibrationJsonFromEdf(localName)
+                    asc_path = self._convertEyeLinkEdfToAsc(localName)
+                    if asc_path is not None:
+                        self._updateEyeLinkCalibrationJsonAscPath(asc_path)
                 except Exception as e:
                     print('*** EyeLink recording finished, but the EDF could not be downloaded (' + str(e) + '). Copy it from the Host PC if needed.')
             try:
