@@ -1029,6 +1029,8 @@ class experiment():
                     
 
             #run the protocol
+            p._sendEyeLinkMessage = self.sendEyeLinkMessage if self._elTracker is not None else None
+            p._okrLogDir = self._resolveEyeLinkSaveDir()
             if self._elTracker is not None:
                 safeName = displayName.replace(' ', '_')
                 self.sendEyeLinkMessage('TRIALID {n}_{name}'.format(n=i + 1, name=safeName))
@@ -1052,4 +1054,6 @@ class experiment():
             protocolProperties = vars(p)
             protocolProperties.pop('_informationWin', None) #can't save ongoing psychopy win so remove it
             protocolProperties.pop('_elTracker', None)
+            protocolProperties.pop('_sendEyeLinkMessage', None)
+            protocolProperties.pop('_okrLogDir', None)
             self.loggedStimuli.append(protocolProperties)

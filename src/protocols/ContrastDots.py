@@ -5,6 +5,8 @@ a red fixation cross.
 """
 from protocols.protocol import protocol
 from psychopy import core, visual, event
+from datetime import datetime
+from pathlib import Path
 import random, math
 import numpy as np
 
@@ -116,6 +118,117 @@ class ContrastDots(protocol):
         ])
 
 
+    def _directionLabel(self):
+        '''Map motion direction (degrees) to slowphase-okr direction names.'''
+        angle = self.deg0to360(self.direction)
+        if 45.0 <= angle < 135.0:
+            return 'Up'
+        if 135.0 <= angle < 225.0:
+            return 'Down'
+        if 225.0 <= angle < 315.0:
+            return 'Left'
+        return 'Right'
+
+
+    def _dotColorLabel(self):
+        if self.dotColor[0] > 0.5 and self.dotColor[1] > 0.5 and self.dotColor[2] > 0.5:
+            return 'White'
+        if self.dotColor[0] < -0.5 and self.dotColor[1] < -0.5 and self.dotColor[2] < -0.5:
+            return 'Black'
+        return 'NA'
+
+
+    def _nextOkrEventIndex(self, counter):
+        counter[0] += 1
+        return counter[0]
+
+
+    def _sendOkrEyeLinkMessage(self, text):
+        sendMessage = getattr(self, '_sendEyeLinkMessage', None)
+        if sendMessage is not None:
+            sendMessage(text)
+
+
+    def _appendOkrContrastBlock(self, events, counter, blockIndex, contrast, startTime, endTime):
+        eventIndex = self._nextOkrEventIndex(counter)
+        direction = self._directionLabel()
+        dotColor = self._dotColorLabel()
+        isAnchor100 = 1 if contrast >= 1.0 else 0
+        events.append({
+            'eventIndex': eventIndex,
+            'eventType': 'ContrastBlock',
+            'contrastBlockIndex': blockIndex,
+            'startTime': startTime,
+            'endTime': endTime,
+            'direction': direction,
+            'contrastLevel': contrast,
+            'dotColor': dotColor,
+            'usePersistentDots': 0,
+            'isAnchor100': isAnchor100,
+        })
+        self._sendOkrEyeLinkMessage(
+            'OKR ContrastBlock B{bi} contrast {c:g} dir {d} {t0:.3f}-{t1:.3f}'.format(
+                bi=blockIndex, c=contrast, d=direction, t0=startTime, t1=endTime,
+            ),
+        )
+
+
+    def _appendOkrFixation(self, events, counter, blockIndex, startTime, endTime):
+        eventIndex = self._nextOkrEventIndex(counter)
+        events.append({
+            'eventIndex': eventIndex,
+            'eventType': 'FixationITI',
+            'contrastBlockIndex': blockIndex,
+            'startTime': startTime,
+            'endTime': endTime,
+            'direction': 'NA',
+            'contrastLevel': 'NA',
+            'dotColor': 'NA',
+            'usePersistentDots': 'NA',
+            'isAnchor100': 'NA',
+        })
+        self._sendOkrEyeLinkMessage(
+            'OKR FixationITI after B{bi} {t0:.3f}-{t1:.3f}'.format(
+                bi=blockIndex, t0=startTime, t1=endTime,
+            ),
+        )
+
+
+    def _writeOkrLogFile(self, events):
+        if not events:
+            return None
+        logDir = getattr(self, '_okrLogDir', None)
+        if logDir is None:
+            logDir = Path.cwd()
+        else:
+            logDir = Path(logDir)
+        logDir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        logPath = logDir / ('OKR_Log_ContrastDots_{stamp}.txt'.format(stamp=stamp))
+        headerLines = [
+            '# OKR Condition Log',
+            '# StimulusName: Bassoon ContrastDots',
+            '# TimeBase: seconds from ContrastDots protocol start (align with EyeLink SYNCTIME sent immediately before this protocol)',
+            'eventIndex\teventType\tcontrastBlockIndex\tstartTime\tendTime\tdirection\tcontrastLevel\tdotColor\tusePersistentDots\tisAnchor100',
+        ]
+        rowLines = []
+        for event in events:
+            rowLines.append('\t'.join([
+                str(event['eventIndex']),
+                event['eventType'],
+                str(event['contrastBlockIndex']),
+                '{:.6f}'.format(event['startTime']),
+                '{:.6f}'.format(event['endTime']),
+                str(event['direction']),
+                str(event['contrastLevel']),
+                str(event['dotColor']),
+                str(event['usePersistentDots']),
+                str(event['isAnchor100']),
+            ]))
+        logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
+        return logPath
+
+
     def respawnDot(self, win, dotRadiusPix, dot=None):
         xPos = random.uniform(
             -win.size[0] / 2 + dotRadiusPix * 2,
@@ -188,59 +301,87 @@ class ContrastDots(protocol):
         self.createContrastLog()
         totalEpochs = len(self._contrastLog)
         trialClock = core.Clock()
+        okrEvents = []
+        okrEventCounter = [0]
 
-        for epochNum, contrast in enumerate(self._contrastLog, start=1):
-            if self._informationWin[0]:
-                self.showInformationText(
-                    win,
-                    'Running Contrast Dots\nContrast = {c}\nEpoch {n} of {total}'.format(
-                        c=contrast, n=epochNum, total=totalEpochs,
-                    ),
+        try:
+            for epochNum, contrast in enumerate(self._contrastLog, start=1):
+                blockIndex = epochNum - 1
+                if self._informationWin[0]:
+                    self.showInformationText(
+                        win,
+                        'Running Contrast Dots\nContrast = {c}\nEpoch {n} of {total}'.format(
+                            c=contrast, n=epochNum, total=totalEpochs,
+                        ),
+                    )
+
+                win.color = self.backgroundColor
+                dots.colors = self.dotColorAtContrast(contrast)
+                self.initDotPositions(win, dotRadiusPix)
+                dots.xys = self.dotCoords.tolist()
+                for f in range(self._interStimulusIntervalNumFrames):
+                    win.flip()
+                    if self.checkQuitOrPause():
+                        return
+
+                self._stimulusStartLog.append(trialClock.getTime())
+                self.sendTTL()
+                self._numberOfEpochsStarted += 1
+
+                for f in range(self._preTimeNumFrames):
+                    dots.draw()
+                    win.flip()
+                    if self.checkQuitOrPause():
+                        return
+
+                motionStart = trialClock.getTime()
+                self.initDotSpawnStagger()
+                for f in range(self._stimTimeNumFrames):
+                    self.currentFrames += 1
+                    for dot in range(self.numberOfDots):
+                        if self.currentFrames[dot] >= dotLifetimeFrames:
+                            self.respawnDot(win, dotRadiusPix, dot=dot)
+                    self.dotCoords[:, 0] += speedComponents[0]
+                    self.dotCoords[:, 1] += speedComponents[1]
+                    dots.xys = self.dotCoords.tolist()
+                    dots.draw()
+                    win.flip()
+                    if self.checkQuitOrPause():
+                        self._appendOkrContrastBlock(
+                            okrEvents, okrEventCounter, blockIndex, contrast,
+                            motionStart, trialClock.getTime(),
+                        )
+                        return
+
+                motionEnd = trialClock.getTime()
+                self._appendOkrContrastBlock(
+                    okrEvents, okrEventCounter, blockIndex, contrast, motionStart, motionEnd,
                 )
 
-            win.color = self.backgroundColor
-            dots.colors = self.dotColorAtContrast(contrast)
-            self.initDotPositions(win, dotRadiusPix)
-            dots.xys = self.dotCoords.tolist()
-            for f in range(self._interStimulusIntervalNumFrames):
+                fixationStart = motionEnd
+                for f in range(self._tailTimeNumFrames):
+                    fixationCross.draw()
+                    win.flip()
+                    if self.checkQuitOrPause():
+                        self._appendOkrFixation(
+                            okrEvents, okrEventCounter, blockIndex,
+                            fixationStart, trialClock.getTime(),
+                        )
+                        return
+
+                fixationEnd = trialClock.getTime()
+                self._appendOkrFixation(
+                    okrEvents, okrEventCounter, blockIndex, fixationStart, fixationEnd,
+                )
+
+                self._stimulusEndLog.append(trialClock.getTime())
+                self.sendTTL()
                 win.flip()
-                if self.checkQuitOrPause():
-                    return
-
-            self._stimulusStartLog.append(trialClock.getTime())
-            self.sendTTL()
-            self._numberOfEpochsStarted += 1
-
-            for f in range(self._preTimeNumFrames):
-                dots.draw()
                 win.flip()
-                if self.checkQuitOrPause():
-                    return
+                self._numberOfEpochsCompleted += 1
 
-            self.initDotSpawnStagger()
-            for f in range(self._stimTimeNumFrames):
-                self.currentFrames += 1
-                for dot in range(self.numberOfDots):
-                    if self.currentFrames[dot] >= dotLifetimeFrames:
-                        self.respawnDot(win, dotRadiusPix, dot=dot)
-                self.dotCoords[:, 0] += speedComponents[0]
-                self.dotCoords[:, 1] += speedComponents[1]
-                dots.xys = self.dotCoords.tolist()
-                dots.draw()
-                win.flip()
-                if self.checkQuitOrPause():
-                    return
-
-            for f in range(self._tailTimeNumFrames):
-                fixationCross.draw()
-                win.flip()
-                if self.checkQuitOrPause():
-                    return
-
-            self._stimulusEndLog.append(trialClock.getTime())
-            self.sendTTL()
-            win.flip()
-            win.flip()
-            self._numberOfEpochsCompleted += 1
-
-        self._completed = 1
+            self._completed = 1
+        finally:
+            okrLogPath = self._writeOkrLogFile(okrEvents)
+            if okrLogPath is not None:
+                print('--> Wrote OKR condition log for slowphase-okr:', okrLogPath)
