@@ -830,13 +830,32 @@ class Bassoon:
         self.removeSelection.set('Select')
         removeDropdown = OptionMenu(removeMonitorLabelFrame, self.removeSelection, *self.monitorNames)
         removeDropdown.grid(row=0, column=1)
-        
+
+        removeMonitorBtn = Button(
+            removeMonitorLabelFrame, text='Remove', padx=5, command=self.removeMonitor)
+        removeMonitorBtn.grid(row=0, column=2, padx=(10, 0))
+
         #save button
         saveFrame = Frame(editMonitorFrame)
         saveFrame.pack()
-        saveMonitorBtn = Button(saveFrame, text='Save', command= lambda: [self.saveMonitor(), self.removeMonitor()])
+        saveMonitorBtn = Button(saveFrame, text='Add', command=self.saveMonitor)
         saveMonitorBtn.grid(row=0, column=0)
-    
+
+    def _psychopyMonitorDir(self):
+        '''Folder where PsychoPy stores monitor calibration JSON files.'''
+        try:
+            folder = getattr(monitors, 'monitorFolder', None)
+            if folder:
+                return Path(folder)
+        except Exception:
+            pass
+
+        appdata = os.environ.get('APPDATA', '')
+        if appdata:
+            return Path(appdata) / 'psychopy3' / 'monitors'
+
+        return Path.home() / 'AppData' / 'Roaming' / 'psychopy3' / 'monitors'
+
     def saveMonitor(self):
         name = self.monitorName.get()
         distance = self.monitorDistance.get()
@@ -845,27 +864,34 @@ class Bassoon:
         else:
             monitor = monitors.Monitor(name, distance=distance)
             monitor.save()
+            self.monitorNames = monitors.getAllMonitors()
             print(f'{name} saved! Close and reopen the options menu to see the updated list of monitors and to select the correct one for the experiment.')
         
     def removeMonitor(self):
-        monitorToRemove = self.removeSelection.get()
-        
-        #check that the OS is windows for path names
-        if os.name == 'nt' or monitorToRemove == 'Select':
-            pass
-        else:
-            try:
-                i = 0
-                endPath = f"AppData\Roaming\psychopy3\monitors\{monitorToRemove}.json"
-                while str(Path(__file__).parents[i+1]) != r"c:\users":
-                    Path(__file__).parents[i]
-                    i += 1
-                    baseDir = Path(__file__).parents[i]
-                monPath = str(baseDir / endPath)
-                os.remove(monPath)
-                print(f'{monitorToRemove} has been removed!')
-            except:
-                print('Could not automatically remove the monitor because the file could not be located on your operating system. If you know where the file is you can manually remove it, or you can use the psychopy monitor center to do so.')
+        monitorToRemove = self.removeSelection.get().strip()
+
+        if not monitorToRemove or monitorToRemove == 'Select':
+            print('*** Select a monitor to remove from the dropdown.')
+            return
+
+        monPath = self._psychopyMonitorDir() / (monitorToRemove + '.json')
+        if not monPath.is_file():
+            print(
+                '*** Could not find monitor calibration file for {name}. Looked in {path}'.format(
+                    name=monitorToRemove, path=monPath)
+            )
+            return
+
+        try:
+            monPath.unlink()
+            self.monitorNames = monitors.getAllMonitors()
+            print(
+                '{name} has been removed! Close and reopen the options menu to refresh the monitor list.'.format(
+                    name=monitorToRemove)
+            )
+        except Exception as e:
+            print('*** Could not remove monitor ({name}): {err}'.format(
+                name=monitorToRemove, err=e))
             
     # Gamma calibration of monitor
     def calibrateGammaMenu(self):
