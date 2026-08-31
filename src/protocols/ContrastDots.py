@@ -4,7 +4,7 @@ Contrast Dots presents coherent moving dots on a gray background, followed by
 a red fixation cross.
 """
 from protocols.protocol import protocol
-from psychopy import core, visual, event
+from psychopy import visual, event
 from datetime import datetime
 from pathlib import Path
 import random, math
@@ -12,6 +12,8 @@ import numpy as np
 
 
 class ContrastDots(protocol):
+    _okrSyncsTrialClock = True
+
     def __init__(self):
         super().__init__()
         self.protocolName = 'ContrastDots'
@@ -208,7 +210,7 @@ class ContrastDots(protocol):
         headerLines = [
             '# OKR Condition Log',
             '# StimulusName: Bassoon ContrastDots',
-            '# TimeBase: seconds from ContrastDots protocol start (align with EyeLink SYNCTIME sent immediately before this protocol)',
+            '# TimeBase: seconds from EyeLink SYNCTIME (sent when stimulus timing clock starts, after setup)',
             'eventIndex\teventType\tcontrastBlockIndex\tstartTime\tendTime\tdirection\tcontrastLevel\tdotColor\tusePersistentDots\tisAnchor100',
         ]
         rowLines = []
@@ -300,7 +302,7 @@ class ContrastDots(protocol):
 
         self.createContrastLog()
         totalEpochs = len(self._contrastLog)
-        trialClock = core.Clock()
+        trialClock = self._startTrialClock()
         okrEvents = []
         okrEventCounter = [0]
 
@@ -334,7 +336,7 @@ class ContrastDots(protocol):
                     if self.checkQuitOrPause():
                         return
 
-                motionStart = trialClock.getTime()
+                motionStart = None
                 self.initDotSpawnStagger()
                 for f in range(self._stimTimeNumFrames):
                     self.currentFrames += 1
@@ -346,6 +348,8 @@ class ContrastDots(protocol):
                     dots.xys = self.dotCoords.tolist()
                     dots.draw()
                     win.flip()
+                    if motionStart is None:
+                        motionStart = trialClock.getTime()
                     if self.checkQuitOrPause():
                         self._appendOkrContrastBlock(
                             okrEvents, okrEventCounter, blockIndex, contrast,
@@ -358,10 +362,12 @@ class ContrastDots(protocol):
                     okrEvents, okrEventCounter, blockIndex, contrast, motionStart, motionEnd,
                 )
 
-                fixationStart = motionEnd
+                fixationStart = None
                 for f in range(self._tailTimeNumFrames):
                     fixationCross.draw()
                     win.flip()
+                    if fixationStart is None:
+                        fixationStart = trialClock.getTime()
                     if self.checkQuitOrPause():
                         self._appendOkrFixation(
                             okrEvents, okrEventCounter, blockIndex,

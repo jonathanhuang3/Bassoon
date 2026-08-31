@@ -180,6 +180,14 @@ class protocol():
         cmWide = mon.currentCalib['width']
         totalVisualDegrees = 2*math.degrees(math.atan((cmWide/2)/eyeDistance))
         return numPixelsWide/totalVisualDegrees
+
+    def _startTrialClock(self):
+        '''Start protocol timing and align EyeLink SYNCTIME with t=0 for OKR logs.'''
+        trialClock = core.Clock()
+        sendMessage = getattr(self, '_sendEyeLinkMessage', None)
+        if sendMessage is not None:
+            sendMessage('SYNCTIME')
+        return trialClock
     
     def showInformationText(self, stimWin, txt):
         '''

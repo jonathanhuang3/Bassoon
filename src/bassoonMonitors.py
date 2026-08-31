@@ -74,6 +74,15 @@ def register_monitor(name, width_cm, distance_cm, size_pix):
     return monitor
 
 
+def save_monitor_gamma(monitor_name, gamma):
+    '''Persist gamma on a PsychoPy monitor profile for visual.Window linearization.'''
+    gamma = float(gamma)
+    monitor = monitors.Monitor(monitor_name)
+    monitor.setGamma(gamma)
+    monitor.save()
+    return gamma
+
+
 def ensure_bassoon_monitors(screen_index=0, definitions=None):
     '''
     Register predefined Bassoon monitors if they are missing or incomplete.

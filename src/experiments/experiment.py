@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
+from bassoonMonitors import save_monitor_gamma
 
 def _loadEyeLinkCoreGraphics():
     try:
@@ -924,9 +925,15 @@ class experiment():
         # GUI integration during EyeLink calibration so cal targets can redraw on the stimulus window.
         allowGui = self.allowGUI and not self.useEyeLink
 
+        try:
+            save_monitor_gamma(self.stimMonitor, self.gamma)
+        except Exception as e:
+            print('*** Could not save gamma to monitor profile', self.stimMonitor, '(' + str(e) + ').')
+
         self.win = visual.Window(
                     allowGUI = allowGui,
                     monitor = self.stimMonitor,
+                    gamma = self.gamma,
                     screen = self.screen,
                     fullscr = self.fullscr,
                     color = self.backgroundColor,
@@ -1036,7 +1043,8 @@ class experiment():
                 self.sendEyeLinkMessage('TRIALID {n}_{name}'.format(n=i + 1, name=safeName))
                 self.sendEyeLinkMessage('!V TRIAL_VAR protocol {name}'.format(name=str(name).replace(' ', '_')))
                 self.sendEyeLinkMessage('!V TRIAL_VAR suffix {suf}'.format(suf=str(suffix).replace(' ', '_')))
-                self.sendEyeLinkMessage('SYNCTIME')
+                if not getattr(p, '_okrSyncsTrialClock', False):
+                    self.sendEyeLinkMessage('SYNCTIME')
             p.run(self.win, (self.useInformationMonitor, self.informationWin)) #send informationMonitor information as a tuple: bool (whether to use), window object
             if self._elTracker is not None:
                 self.sendEyeLinkMessage('TRIAL_RESULT 0')

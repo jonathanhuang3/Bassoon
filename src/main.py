@@ -39,7 +39,7 @@ os.chdir(SRC_DIR)
 
 # Each protocol subclass must be imported here:
 from experiments.experiment import experiment
-from bassoonMonitors import ensure_bassoon_monitors
+from bassoonMonitors import ensure_bassoon_monitors, save_monitor_gamma
 from protocols.protocol import protocol
 from protocols.Flash import Flash
 from protocols.Pause import Pause
@@ -60,6 +60,7 @@ from protocols.SumOfSinesOscillation import SumOfSinesOscillation
 from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
 from protocols.ContrastDots import ContrastDots
+from protocols.CalibrationMonitor import CalibrationMonitor
 
 class Bassoon:
     def __init__(self, master):
@@ -581,7 +582,7 @@ class Bassoon:
         stimScreenNumberDropdown.grid(row=2, column=6)
 
         # stimulus monitor gamma calibration
-        self.calGamma = 2.0
+        self.calGamma = self.experiment.gamma
         stimCalibrationLabel = Label(stimulusFrame, text='Calibrate gamma', padx=7)
         stimCalibrationLabel.grid(row=3, column=1)
         self.stimCalibrationBtn = Button(stimulusFrame, text='\u03B3 is {g}'.format(g=round(self.experiment.gamma,5)), padx=7, command= lambda: self.calibrateGammaMenu())
@@ -944,7 +945,17 @@ class Bassoon:
         gVal.set(self.experiment.gamma)
         gammaEntry = Entry(gammaFrame,textvariable=gVal,bg='#FEC47F')
         gammaEntry.grid(row=5,column=2)
-        gammaButton = Button(gammaFrame,text='Set gamma', padx=4, command= lambda: monitors.Monitor(self.stimMonitorSelection.get()).setGamma(gVal.get()))
+
+        def applyMonitorGamma():
+            monitorName = self.stimMonitorSelection.get()
+            gamma = save_monitor_gamma(monitorName, gVal.get())
+            self.calGamma = gamma
+            self.experiment.gamma = gamma
+            self.stimCalibrationBtn.config(text='\u03B3 is {g}'.format(g=round(gamma, 5)))
+            self.setConfigFile()
+            print('--> Saved gamma {g} to monitor profile {name}'.format(g=gamma, name=monitorName))
+
+        gammaButton = Button(gammaFrame, text='Set gamma', padx=4, command=lambda: applyMonitorGamma())
         gammaButton.grid(row=5, column=3)
 
         self.luminanceValues = []
@@ -1039,7 +1050,7 @@ class Bassoon:
                     print('---> Done with luminance value collection. Gamma of {gamma} will be set for {monitor}'.format(gamma=gcalc.gamma,monitor=self.stimMonitorSelection.get()))
                     # Set gamma to monitor
                     self.calGamma = gcalc.gamma
-                    monitors.Monitor(self.stimMonitorSelection.get()).setGamma(gcalc.gamma)
+                    save_monitor_gamma(self.stimMonitorSelection.get(), gcalc.gamma)
                     gVal.set(self.calGamma)
                     gammaEntry.delete(0,END)
                     gammaEntry.insert(0,gcalc.gamma)
@@ -1075,6 +1086,10 @@ class Bassoon:
         self.experiment.fullscr = self.stimFullScreenSelection.get() == 1
         self.experiment.screen = self.stimScreenSelection.get()
         self.experiment.gamma = self.calGamma
+        try:
+            save_monitor_gamma(self.stimMonitorSelection.get(), self.calGamma)
+        except Exception as e:
+            print('*** Could not save gamma to monitor profile (' + str(e) + ').')
         if self.calGamma == 2.0:
             print('***Gamma for monitor set to default value (2.0). Run gamma calibration to load true gamma.')
 
