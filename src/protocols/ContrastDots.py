@@ -27,11 +27,13 @@ class ContrastDots(protocol):
         # Dot parameters
         self.numberOfDots = 100 #number of dots displayed at once
         self.dotColor = [1.0, 1.0, 1.0] #white dots at full contrast (in RGB, -1 to 1)
-        self.contrasts = [1.0, 0.5] #list of contrast levels (1.0 = 100% white, 0.5 = 50% white). Total epochs = len(contrasts) * stimulusReps
+        self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0] #list of contrast levels from -1 to 1. Total epochs = len(contrasts) * len(directions) * stimulusReps
         self.dotSizeDegrees = 1.0 #degrees - dot diameter
         self.dotLifetime = 0.15 #seconds - how long each dot stays visible before respawning
-        self.spawnStagger = 0.15 #seconds - random delay before each dot's first respawn timer starts
-        self.direction = 90.0 #degrees - dot motion direction (90 = up)
+        self.spawnStagger = 0.15 #seconds - max random delay before each dot's first lifetime expiry (spreads respawns across time)
+        self.direction = 90.0 #degrees - legacy single direction; ignored when directions has more than one entry
+        self.directions = [90.0, 270.0] #degrees - motion directions per block (90 up, 270 down)
+        self.maxConsecutiveSameDirection = 3 #maximum blocks in a row with the same direction before forcing a switch
         self.speed = 10.0 #degrees per second
 
         # Fixation cross shown during tail time
@@ -59,13 +61,25 @@ class ContrastDots(protocol):
             tf = False
             errorMessage.append('Contrasts must contain at least one value.')
         for contrast in self.contrasts:
-            if contrast < 0 or contrast > 1:
+            if contrast < -1 or contrast > 1:
                 tf = False
-                errorMessage.append('Contrast values must be between 0 and 1.')
+                errorMessage.append('Contrast values must be between -1 and 1.')
                 break
         if self.fixationCrossSizeDegrees <= 0:
             tf = False
             errorMessage.append('Fixation Cross Size must be greater than 0 degrees.')
+        directionPool = self._directionPool()
+        if len(directionPool) == 0:
+            tf = False
+            errorMessage.append('Directions must contain at least one value.')
+        for direction in directionPool:
+            if direction < 0 or direction >= 360:
+                tf = False
+                errorMessage.append('Direction values must be between 0 and 360 degrees.')
+                break
+        if self.maxConsecutiveSameDirection < 1:
+            tf = False
+            errorMessage.append('Max Consecutive Same Direction must be at least 1.')
 
         tfColors, colorErrorMessages = self.validateColorInput()
         tf = tf and tfColors
@@ -75,12 +89,13 @@ class ContrastDots(protocol):
 
     def estimateTime(self):
         timePerEpoch = self.preTime + self.stimTime + self.tailTime + self.interStimulusInterval
-        numberOfEpochs = self.stimulusReps * len(self.contrasts)
+        numberOfEpochs = self.stimulusReps * len(self.contrasts) * len(self._directionPool())
         self._estimatedTime = timePerEpoch * numberOfEpochs
         return self._estimatedTime
 
 
     def dotColorAtContrast(self, contrast):
+        '''Linear contrast around background: 0 = background, +1 = dotColor, -1 = mirrored decrement.'''
         return [
             self.backgroundColor[i] + contrast * (self.dotColor[i] - self.backgroundColor[i])
             for i in range(3)
@@ -89,11 +104,64 @@ class ContrastDots(protocol):
 
     def createContrastLog(self):
         '''Build a randomized sequence of contrast levels, one per epoch.'''
-        self._contrastLog = []
-        random.seed(self.randomSeed)
+        self.createEpochLog()
 
+
+    def _directionPool(self):
+        '''Return normalized direction angles used for this protocol.'''
+        pool = getattr(self, 'directions', None)
+        if not pool:
+            return [self.deg0to360(self.direction)]
+        return [self.deg0to360(d) for d in pool]
+
+
+    def _directionRunIsValid(self, epoch_log):
+        max_run = int(self.maxConsecutiveSameDirection)
+        if max_run < 1 or len(epoch_log) <= max_run:
+            return True
+        run_count = 1
+        for index in range(1, len(epoch_log)):
+            if epoch_log[index]['direction'] == epoch_log[index - 1]['direction']:
+                run_count += 1
+                if run_count > max_run:
+                    return False
+            else:
+                run_count = 1
+        return True
+
+
+    def _buildFactorialEpochPairs(self):
+        '''Every contrast paired with every direction, repeated per stimulusRep.'''
+        direction_pool = self._directionPool()
+        pairs = []
         for _ in range(self.stimulusReps):
-            self._contrastLog += random.sample(self.contrasts, len(self.contrasts))
+            for contrast in self.contrasts:
+                for direction in direction_pool:
+                    pairs.append({'contrast': contrast, 'direction': direction})
+        return pairs
+
+
+    def _shuffleEpochLog(self, pairs):
+        '''Randomize block order; retry if direction consecutive limit is exceeded.'''
+        if not pairs:
+            return pairs
+        shuffled = list(pairs)
+        if len(self._directionPool()) == 1:
+            random.shuffle(shuffled)
+            return shuffled
+        for _ in range(1000):
+            random.shuffle(shuffled)
+            if self._directionRunIsValid(shuffled):
+                return shuffled
+        return shuffled
+
+
+    def createEpochLog(self):
+        '''Build every contrast x direction pair, then shuffle block order.'''
+        random.seed(self.randomSeed)
+        pairs = self._buildFactorialEpochPairs()
+        self._epochLog = self._shuffleEpochLog(pairs)
+        self._contrastLog = [epoch['contrast'] for epoch in self._epochLog]
 
 
     def initDotPositions(self, win, dotRadiusPix):
@@ -120,9 +188,9 @@ class ContrastDots(protocol):
         ])
 
 
-    def _directionLabel(self):
+    def _directionLabel(self, direction=None):
         '''Map motion direction (degrees) to slowphase-okr direction names.'''
-        angle = self.deg0to360(self.direction)
+        angle = self.deg0to360(self.direction if direction is None else direction)
         if 45.0 <= angle < 135.0:
             return 'Up'
         if 135.0 <= angle < 225.0:
@@ -151,18 +219,18 @@ class ContrastDots(protocol):
             sendMessage(text)
 
 
-    def _appendOkrContrastBlock(self, events, counter, blockIndex, contrast, startTime, endTime):
+    def _appendOkrContrastBlock(self, events, counter, blockIndex, contrast, direction, startTime, endTime):
         eventIndex = self._nextOkrEventIndex(counter)
-        direction = self._directionLabel()
+        directionLabel = self._directionLabel(direction)
         dotColor = self._dotColorLabel()
-        isAnchor100 = 1 if contrast >= 1.0 else 0
+        isAnchor100 = 1 if contrast >= 1.0 or contrast <= -1.0 else 0
         events.append({
             'eventIndex': eventIndex,
             'eventType': 'ContrastBlock',
             'contrastBlockIndex': blockIndex,
             'startTime': startTime,
             'endTime': endTime,
-            'direction': direction,
+            'direction': directionLabel,
             'contrastLevel': contrast,
             'dotColor': dotColor,
             'usePersistentDots': 0,
@@ -170,7 +238,7 @@ class ContrastDots(protocol):
         })
         self._sendOkrEyeLinkMessage(
             'OKR ContrastBlock B{bi} contrast {c:g} dir {d} {t0:.3f}-{t1:.3f}'.format(
-                bi=blockIndex, c=contrast, d=direction, t0=startTime, t1=endTime,
+                bi=blockIndex, c=contrast, d=directionLabel, t0=startTime, t1=endTime,
             ),
         )
 
@@ -207,10 +275,14 @@ class ContrastDots(protocol):
         logDir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         logPath = logDir / ('OKR_Log_ContrastDots_{stamp}.txt'.format(stamp=stamp))
+        directionPool = self._directionPool()
+        directionText = ', '.join('{g:g}'.format(g=d) for d in directionPool)
         headerLines = [
             '# OKR Condition Log',
             '# StimulusName: Bassoon ContrastDots',
             '# TimeBase: seconds from EyeLink SYNCTIME (sent when stimulus timing clock starts, after setup)',
+            '# DirectionsDeg: {dirs}'.format(dirs=directionText),
+            '# MaxConsecutiveSameDirection: {n}'.format(n=int(self.maxConsecutiveSameDirection)),
             'eventIndex\teventType\tcontrastBlockIndex\tstartTime\tendTime\tdirection\tcontrastLevel\tdotColor\tusePersistentDots\tisAnchor100',
         ]
         rowLines = []
@@ -256,14 +328,7 @@ class ContrastDots(protocol):
 
         random.seed(self.randomSeed)
         pixPerDeg = self.getPixPerDeg(win.monitor)
-        pixPerFrame = self.speed * pixPerDeg * (1 / self._FR)
         dotRadiusPix = (self.dotSizeDegrees / 2.0) * pixPerDeg
-
-        directionRad = math.radians(self.deg0to360(self.direction))
-        speedComponents = np.array([
-            pixPerFrame * math.cos(directionRad),
-            pixPerFrame * math.sin(directionRad),
-        ])
 
         if self.userInitiated:
             self.showInformationText(
@@ -300,20 +365,32 @@ class ContrastDots(protocol):
             units='pix',
         )
 
-        self.createContrastLog()
-        totalEpochs = len(self._contrastLog)
+        self.createEpochLog()
+        totalEpochs = len(self._epochLog)
         trialClock = self._startTrialClock()
         okrEvents = []
         okrEventCounter = [0]
 
         try:
-            for epochNum, contrast in enumerate(self._contrastLog, start=1):
+            for epochNum, epoch in enumerate(self._epochLog, start=1):
+                contrast = epoch['contrast']
+                blockDirection = epoch['direction']
                 blockIndex = epochNum - 1
+                pixPerFrame = self.speed * pixPerDeg * (1 / self._FR)
+                directionRad = math.radians(blockDirection)
+                speedComponents = np.array([
+                    pixPerFrame * math.cos(directionRad),
+                    pixPerFrame * math.sin(directionRad),
+                ])
                 if self._informationWin[0]:
                     self.showInformationText(
                         win,
-                        'Running Contrast Dots\nContrast = {c}\nEpoch {n} of {total}'.format(
-                            c=contrast, n=epochNum, total=totalEpochs,
+                        'Running Contrast Dots\nContrast = {c}\nDirection = {d:g}\u00b0 ({label})\nEpoch {n} of {total}'.format(
+                            c=contrast,
+                            d=blockDirection,
+                            label=self._directionLabel(blockDirection),
+                            n=epochNum,
+                            total=totalEpochs,
                         ),
                     )
 
@@ -352,14 +429,15 @@ class ContrastDots(protocol):
                         motionStart = trialClock.getTime()
                     if self.checkQuitOrPause():
                         self._appendOkrContrastBlock(
-                            okrEvents, okrEventCounter, blockIndex, contrast,
+                            okrEvents, okrEventCounter, blockIndex, contrast, blockDirection,
                             motionStart, trialClock.getTime(),
                         )
                         return
 
                 motionEnd = trialClock.getTime()
                 self._appendOkrContrastBlock(
-                    okrEvents, okrEventCounter, blockIndex, contrast, motionStart, motionEnd,
+                    okrEvents, okrEventCounter, blockIndex, contrast, blockDirection,
+                    motionStart, motionEnd,
                 )
 
                 fixationStart = None
