@@ -60,6 +60,7 @@ from protocols.SumOfSinesOscillation import SumOfSinesOscillation
 from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
 from protocols.ContrastDots import ContrastDots
+from protocols.MaskDots import MaskDots
 from protocols.CalibrationMonitor import CalibrationMonitor
 
 class Bassoon:

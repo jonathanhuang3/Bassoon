@@ -41,6 +41,11 @@ class ContrastDots(protocol):
         self.fixationCrossSizeDegrees = 1.0 #degrees - height of the fixation cross
 
 
+    def _usePersistentDots(self):
+        '''When True, dots are placed once per epoch and never respawn.'''
+        return False
+
+
     def internalValidation(self):
         tf = True
         errorMessage = []
@@ -48,7 +53,7 @@ class ContrastDots(protocol):
         if self.dotSizeDegrees <= 0:
             tf = False
             errorMessage.append('Dot Size must be greater than 0 degrees.')
-        if self.dotLifetime <= 0:
+        if not self._usePersistentDots() and self.dotLifetime <= 0:
             tf = False
             errorMessage.append('Dot Lifetime must be greater than 0 seconds.')
         if self.speed < 0:
@@ -233,7 +238,7 @@ class ContrastDots(protocol):
             'direction': directionLabel,
             'contrastLevel': contrast,
             'dotColor': dotColor,
-            'usePersistentDots': 0,
+            'usePersistentDots': int(self._usePersistentDots()),
             'isAnchor100': isAnchor100,
         })
         self._sendOkrEyeLinkMessage(
@@ -274,12 +279,14 @@ class ContrastDots(protocol):
             logDir = Path(logDir)
         logDir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        logPath = logDir / ('OKR_Log_ContrastDots_{stamp}.txt'.format(stamp=stamp))
+        logPath = logDir / ('OKR_Log_{name}_{stamp}.txt'.format(
+            name=self.protocolName, stamp=stamp,
+        ))
         directionPool = self._directionPool()
         directionText = ', '.join('{g:g}'.format(g=d) for d in directionPool)
         headerLines = [
             '# OKR Condition Log',
-            '# StimulusName: Bassoon ContrastDots',
+            '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
             '# TimeBase: seconds from EyeLink SYNCTIME (sent when stimulus timing clock starts, after setup)',
             '# DirectionsDeg: {dirs}'.format(dirs=directionText),
             '# MaxConsecutiveSameDirection: {n}'.format(n=int(self.maxConsecutiveSameDirection)),
@@ -318,6 +325,42 @@ class ContrastDots(protocol):
         return xPos, yPos
 
 
+    def _wrapPersistentDotCoords(self, win, dotRadiusPix):
+        '''Keep persistent dots on screen by wrapping coordinates at the edges.'''
+        margin = dotRadiusPix * 2
+        xMin = -win.size[0] / 2 + margin
+        xMax = win.size[0] / 2 - margin
+        yMin = -win.size[1] / 2 + margin
+        yMax = win.size[1] / 2 - margin
+        xSpan = xMax - xMin
+        ySpan = yMax - yMin
+        self.dotCoords[:, 0] = xMin + ((self.dotCoords[:, 0] - xMin) % xSpan)
+        self.dotCoords[:, 1] = yMin + ((self.dotCoords[:, 1] - yMin) % ySpan)
+
+
+    def _afterDotMotion(self, win, dotRadiusPix, speedComponents):
+        if self._usePersistentDots():
+            self._wrapPersistentDotCoords(win, dotRadiusPix)
+
+
+    def _stimulusTitle(self):
+        return 'Contrast Dots'
+
+
+    def _initPerRunStimulus(self, win, pixPerDeg):
+        '''Optional per-run setup hook for subclasses (e.g. gaze-contingent mask).'''
+        pass
+
+
+    def _renderDotsFrame(self, win, dots):
+        dots.draw()
+
+
+    def _teardownPerRunStimulus(self):
+        '''Optional per-run cleanup hook for subclasses.'''
+        pass
+
+
     def run(self, win, informationWin):
         self._completed = 0
         self._informationWin = informationWin
@@ -330,10 +373,14 @@ class ContrastDots(protocol):
         pixPerDeg = self.getPixPerDeg(win.monitor)
         dotRadiusPix = (self.dotSizeDegrees / 2.0) * pixPerDeg
 
+        self._initPerRunStimulus(win, pixPerDeg)
+
         if self.userInitiated:
             self.showInformationText(
                 win,
-                'Stimulus Information: Contrast Dots\nPress any key to begin',
+                'Stimulus Information: {title}\nPress any key to begin'.format(
+                    title=self._stimulusTitle(),
+                ),
             )
             event.waitKeys()
 
@@ -385,7 +432,8 @@ class ContrastDots(protocol):
                 if self._informationWin[0]:
                     self.showInformationText(
                         win,
-                        'Running Contrast Dots\nContrast = {c}\nDirection = {d:g}\u00b0 ({label})\nEpoch {n} of {total}'.format(
+                        'Running {title}\nContrast = {c}\nDirection = {d:g}\u00b0 ({label})\nEpoch {n} of {total}'.format(
+                            title=self._stimulusTitle(),
                             c=contrast,
                             d=blockDirection,
                             label=self._directionLabel(blockDirection),
@@ -408,22 +456,25 @@ class ContrastDots(protocol):
                 self._numberOfEpochsStarted += 1
 
                 for f in range(self._preTimeNumFrames):
-                    dots.draw()
+                    self._renderDotsFrame(win, dots)
                     win.flip()
                     if self.checkQuitOrPause():
                         return
 
                 motionStart = None
-                self.initDotSpawnStagger()
+                if not self._usePersistentDots():
+                    self.initDotSpawnStagger()
                 for f in range(self._stimTimeNumFrames):
-                    self.currentFrames += 1
-                    for dot in range(self.numberOfDots):
-                        if self.currentFrames[dot] >= dotLifetimeFrames:
-                            self.respawnDot(win, dotRadiusPix, dot=dot)
+                    if not self._usePersistentDots():
+                        self.currentFrames += 1
+                        for dot in range(self.numberOfDots):
+                            if self.currentFrames[dot] >= dotLifetimeFrames:
+                                self.respawnDot(win, dotRadiusPix, dot=dot)
                     self.dotCoords[:, 0] += speedComponents[0]
                     self.dotCoords[:, 1] += speedComponents[1]
+                    self._afterDotMotion(win, dotRadiusPix, speedComponents)
                     dots.xys = self.dotCoords.tolist()
-                    dots.draw()
+                    self._renderDotsFrame(win, dots)
                     win.flip()
                     if motionStart is None:
                         motionStart = trialClock.getTime()
@@ -466,6 +517,7 @@ class ContrastDots(protocol):
 
             self._completed = 1
         finally:
+            self._teardownPerRunStimulus()
             okrLogPath = self._writeOkrLogFile(okrEvents)
             if okrLogPath is not None:
                 print('--> Wrote OKR condition log for slowphase-okr:', okrLogPath)

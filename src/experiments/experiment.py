@@ -1090,6 +1090,7 @@ class experiment():
 
             #run the protocol
             p._sendEyeLinkMessage = self.sendEyeLinkMessage if self._elTracker is not None else None
+            p._elTracker = self._elTracker
             p._okrLogDir = self._resolveEyeLinkSaveDir()
             if self._elTracker is not None:
                 safeName = displayName.replace(' ', '_')
