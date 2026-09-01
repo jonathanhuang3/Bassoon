@@ -780,6 +780,19 @@ class Bassoon:
             eyeLinkFrame, text='Browse', padx=7,
             command=lambda ent=eyeLinkDirEnt: self.findEyeLinkSaveFolder(monitorEditWindow, ent))
         eyeLinkDirBtn.grid(row=2, column=1, sticky='w', padx=(0, 10))
+
+        eyeLinkCalTargetLabel = Label(eyeLinkFrame, text='Cal Target', padx=10)
+        eyeLinkCalTargetLabel.grid(row=3, column=0, sticky='w')
+        self.eyeLinkCalTargetSelection = StringVar(root)
+        cal_target_display = 'Fish' if self.experiment.eyeLinkCalTarget == 'fish' else 'Standard'
+        self.eyeLinkCalTargetSelection.set(cal_target_display)
+        eyeLinkCalTargetDropdown = OptionMenu(
+            eyeLinkFrame,
+            self.eyeLinkCalTargetSelection,
+            *['Standard', 'Fish'],
+        )
+        eyeLinkCalTargetDropdown.grid(row=3, column=1, sticky='w')
+
         eyeLinkFrame.columnconfigure(2, weight=1)
 
         buttonFrame = Frame(editFrame, pady=15)
@@ -1129,6 +1142,8 @@ class Bassoon:
         edfValue = self.eyeLinkEDFSelection.get().strip()
         self.experiment.eyeLinkEDF = edfValue if edfValue != '' else 'BASS.EDF'
         self.experiment.eyeLinkEDFDir = self.eyeLinkEDFDirSelection.get().strip()
+        cal_target_value = self.eyeLinkCalTargetSelection.get().strip().lower()
+        self.experiment.eyeLinkCalTarget = 'fish' if cal_target_value == 'fish' else 'standard'
 
         print('\n--> New experiment settings have been applied')
 
@@ -1165,7 +1180,10 @@ class Bassoon:
                 "eyeLinkDummy": self.eyeLinkDummySelection.get() == 1,
                 "eyeLinkIP": self.eyeLinkIPSelection.get().strip(),
                 "eyeLinkEDF": self.eyeLinkEDFSelection.get().strip(),
-                "eyeLinkEDFDir": self.eyeLinkEDFDirSelection.get().strip()
+                "eyeLinkEDFDir": self.eyeLinkEDFDirSelection.get().strip(),
+                "eyeLinkCalTarget": (
+                    'fish' if self.eyeLinkCalTargetSelection.get().strip().lower() == 'fish' else 'standard'
+                ),
             }
         }
 

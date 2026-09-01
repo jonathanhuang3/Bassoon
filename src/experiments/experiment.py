@@ -7,6 +7,7 @@ Created on Fri Jul  9 17:24:12 2021
 from psychopy import core, visual, data, event, monitors
 from psychopy.visual.windowwarp import Warper
 import os
+import math
 import serial
 import json
 import re
@@ -17,6 +18,9 @@ from pathlib import Path
 from datetime import datetime
 
 from bassoonMonitors import save_monitor_gamma
+
+_CALIBRATION_FISH_PATH = Path(__file__).resolve().parent.parent / 'assets' / 'calibration_fish.png'
+
 
 def _loadEyeLinkCoreGraphics():
     try:
@@ -29,12 +33,33 @@ def _loadEyeLinkCoreGraphics():
 class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
     '''EyeLink graphics with visible defaults and GUI event pumping for Bassoon.'''
 
-    def __init__(self, tracker, win, gui_root=None):
+    def __init__(
+        self,
+        tracker,
+        win,
+        gui_root=None,
+        cal_target_mode='standard',
+        fish_image_path=None,
+        fish_width_deg=1.0,
+        pix_per_deg=None,
+    ):
+        self._cal_target_mode = cal_target_mode
+        self._fish_image_path = fish_image_path
+        self._fish_width_deg = fish_width_deg
+        self._pix_per_deg = pix_per_deg
         super().__init__(tracker, win, disableAudio=True)
         self._gui_root = gui_root
         # Built-in defaults are black-on-black until the Host sends colors.
         bg = list(win.color) if hasattr(win.color, '__len__') else [-1, -1, -1]
         self.setCalibrationColors([1, 1, 1], bg)
+        if self._cal_target_mode == 'fish':
+            fish_path = Path(self._fish_image_path) if self._fish_image_path else None
+            if fish_path is None or not fish_path.is_file():
+                print('*** Fish calibration image not found; using standard target.')
+                self._cal_target_mode = 'standard'
+            else:
+                self.setTargetType('picture')
+                self.setPictureTarget(str(fish_path))
         self.update_cal_target()
 
     def _pumpGuiEvents(self):
@@ -52,6 +77,14 @@ class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
     def get_input_key(self):
         self._pumpGuiEvents()
         return super().get_input_key()
+
+    def update_cal_target(self):
+        super().update_cal_target()
+        if self._cal_target_mode == 'fish' and self._calibTar is not None and self._pix_per_deg:
+            width_px = self._fish_width_deg * self._pix_per_deg
+            nat_w, nat_h = self._calibTar.size
+            if nat_h > 0:
+                self._calibTar.size = (width_px, width_px * (nat_h / nat_w))
 
     def draw_cal_target(self, x, y):
         fg = self.getForegroundColor()
@@ -112,6 +145,7 @@ class experiment():
         self.eyeLinkIP = '100.1.1.1' # Host PC address on the dedicated Ethernet link
         self.eyeLinkEDF = 'BASS.EDF' # Host filename, 8 chars + .EDF
         self.eyeLinkEDFDir = '' # folder on the Bassoon PC for downloaded EDFs; empty means current working directory
+        self.eyeLinkCalTarget = 'standard' # 'standard' (circles) or 'fish' (1 deg fish icon)
         self.eyeLinkEdf2AscPath = '' # optional full path to edf2asc.exe; empty means auto-detect
         self.eyeLinkWriteAsc = True # convert downloaded EDF to ASC after each EyeLink session
         self._elTracker = None
@@ -158,6 +192,7 @@ class experiment():
                     self.eyeLinkIP = configOptions['experiment'].get('eyeLinkIP', '100.1.1.1')
                     self.eyeLinkEDF = configOptions['experiment'].get('eyeLinkEDF', 'BASS.EDF')
                     self.eyeLinkEDFDir = configOptions['experiment'].get('eyeLinkEDFDir', '')
+                    self.eyeLinkCalTarget = configOptions['experiment'].get('eyeLinkCalTarget', 'standard')
                     self.eyeLinkEdf2AscPath = configOptions['experiment'].get('eyeLinkEdf2AscPath', '')
                     self.eyeLinkWriteAsc = configOptions['experiment'].get('eyeLinkWriteAsc', True)
                 except:
@@ -173,12 +208,24 @@ class experiment():
             'eyeLinkIP': '100.1.1.1',
             'eyeLinkEDF': 'BASS.EDF',
             'eyeLinkEDFDir': '',
+            'eyeLinkCalTarget': 'standard',
             'eyeLinkEdf2AscPath': '',
             'eyeLinkWriteAsc': True,
         }
         for key, value in defaults.items():
             if not hasattr(self, key):
                 setattr(self, key, value)
+        if getattr(self, 'eyeLinkCalTarget', 'standard') not in ('standard', 'fish'):
+            self.eyeLinkCalTarget = 'standard'
+
+    def getPixPerDeg(self):
+        '''Pixels per visual degree for the stimulus monitor.'''
+        mon = monitors.Monitor(self.stimMonitor)
+        eyeDistance = mon.getDistance()
+        numPixelsWide = mon.currentCalib['sizePix'][0]
+        cmWide = mon.currentCalib['width']
+        totalVisualDegrees = 2 * math.degrees(math.atan((cmWide / 2) / eyeDistance))
+        return numPixelsWide / totalVisualDegrees
 
     def addProtocol(self, newProtocol):
         '''
@@ -823,10 +870,16 @@ class experiment():
                         self._elTracker,
                         self.win,
                         gui_root=gui_root,
+                        cal_target_mode=self.eyeLinkCalTarget,
+                        fish_image_path=_CALIBRATION_FISH_PATH,
+                        fish_width_deg=1.0,
+                        pix_per_deg=self.getPixPerDeg(),
                     )
                     pylink.openGraphicsEx(genv)
+                    cal_label = 'fish (~1° wide)' if self.eyeLinkCalTarget == 'fish' else 'dots'
                     print('--> EyeLink setup ready.')
-                    print('    Calibration DOTS appear on the STIMULUS monitor (PsychoPy window), not the Host PC.')
+                    print('    Calibration targets ({t}) appear on the STIMULUS monitor (PsychoPy window), not the Host PC.'.format(
+                        t=cal_label))
                     print('    Window size: {w} x {h}  |  screen #: {s}  |  fullscreen: {f}'.format(
                         w=int(scn_w), h=int(scn_h), s=self.screen, f=self.fullscr))
                     print('    On Host PC: Enter = camera setup, C = calibrate, V = validate, Enter/Esc = exit setup.')
