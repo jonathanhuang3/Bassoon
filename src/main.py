@@ -61,7 +61,9 @@ from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
 from protocols.ContrastDots import ContrastDots
 from protocols.MaskDots import MaskDots
+from protocols.HemifieldMaskDots import HemifieldMaskDots
 from protocols.CalibrationMonitor import CalibrationMonitor
+from protocols.VisualAcuityDots import VisualAcuityDots
 
 class Bassoon:
     def __init__(self, master):
