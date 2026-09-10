@@ -1037,85 +1037,154 @@ class experiment():
                 self.informationWin.close()
 
 
+    def _startOkrSessionLog(self):
+        '''Start a continuous OKR timeline for the whole multi-stimulus run.'''
+        self._okrSessionEvents = []
+        self._okrSessionEventCounter = [0]
+        self._okrSessionClock = core.Clock()
+        if self._elTracker is not None:
+            self.sendEyeLinkMessage('SESSION_SYNCTIME')
+
+    def _writeOkrSessionLogFile(self):
+        '''Write one OKR log covering every stimulus condition in this run.'''
+        events = getattr(self, '_okrSessionEvents', None)
+        if not events:
+            return None
+        logDir = self._resolveEyeLinkSaveDir()
+        logDir.mkdir(parents=True, exist_ok=True)
+        stamp = getattr(self, '_eyeLinkSessionStamp', None)
+        if not stamp:
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        logPath = logDir / ('OKR_Log_Session_{stamp}.txt'.format(stamp=stamp))
+        protocolNames = []
+        for name, _protocol in self.protocolList:
+            safe = str(name).replace(' ', '_')
+            if safe not in protocolNames:
+                protocolNames.append(safe)
+        headerLines = [
+            '# OKR Session Condition Log',
+            '# StimulusNames: {names}'.format(names=', '.join(protocolNames)),
+            '# TimeBase: seconds from SESSION_SYNCTIME (sent when the multi-stimulus run timing clock starts)',
+            '# Note: protocolStartTime/protocolEndTime are seconds from each protocol SYNCTIME; startTime/endTime are continuous across the run',
+            'eventIndex\tprotocolIndex\tprotocolName\teventType\tstartTime\tendTime\tprotocolStartTime\tprotocolEndTime\tdirection\tcontrastLevel\tlogMAR\tblockOrEpochIndex\tsweep\tdotColor\tusePersistentDots\tisAnchor100',
+        ]
+        rowLines = []
+        for event in events:
+            rowLines.append('\t'.join([
+                str(event['eventIndex']),
+                str(event['protocolIndex']),
+                str(event['protocolName']),
+                str(event['eventType']),
+                '{:.6f}'.format(event['startTime']),
+                '{:.6f}'.format(event['endTime']),
+                '{:.6f}'.format(event['protocolStartTime']),
+                '{:.6f}'.format(event['protocolEndTime']),
+                str(event['direction']),
+                str(event['contrastLevel']),
+                str(event['logMAR']),
+                str(event['blockOrEpochIndex']),
+                str(event['sweep']),
+                str(event['dotColor']),
+                str(event['usePersistentDots']),
+                str(event['isAnchor100']),
+            ]))
+        logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
+        return logPath
+
     def _runProtocolLoop(self):
         '''
         Play each protocol in order. Split out of activate() so EyeLink is always stopped in a finally block.
         '''
-        for i, p in enumerate(self.protocolList):
-            name = p[0] #note: p is not a deep copy, so the pointer in memory is to the same location as the protocol in self.protocolList and app.experiment.protocolList
-            suffix = p[1].suffix
-            
-            if suffix == '_' or suffix.strip() == '':
-                displayName = name
-            else:
-                displayName = name + suffix
+        self._startOkrSessionLog()
+        try:
+            for i, p in enumerate(self.protocolList):
+                name = p[0] #note: p is not a deep copy, so the pointer in memory is to the same location as the protocol in self.protocolList and app.experiment.protocolList
+                suffix = p[1].suffix
+                
+                if suffix == '_' or suffix.strip() == '':
+                    displayName = name
+                else:
+                    displayName = name + suffix
 
-            print('!!! Running Protocol Number ' + str(i+1) + ' of ' +  str(len(self.protocolList)) + ', with name ' + displayName)
-            p = p[1] #the protocol object is the second one in the tuple
+                print('!!! Running Protocol Number ' + str(i+1) + ' of ' +  str(len(self.protocolList)) + ', with name ' + displayName)
+                p = p[1] #the protocol object is the second one in the tuple
 
-            #assign relevant experiment properties to the protocol
-            p._timingReport = self.timingReport
-            if hasattr(p, '_angleOffset'):
-                p._angleOffset = self.angleOffset
+                #assign relevant experiment properties to the protocol
+                p._timingReport = self.timingReport
+                if hasattr(p, '_angleOffset'):
+                    p._angleOffset = self.angleOffset
 
-            p.writeTTL = self.writeTTL #set the TTL write mode (inherits from the experiment)
+                p.writeTTL = self.writeTTL #set the TTL write mode (inherits from the experiment)
 
-            #set up the TTL ports based on the mode.
-            if self.writeTTL == 'Pulse':
-                if not hasattr(self, 'portObj'):
-                    print('\n***NOTICE: stimulus ', i, 'was skipped because a TTL write method was selected, but no port has been connected to.')
-                    continue
-                p._portObj = self.portObj #initialize portObj for sending TTL pulses
-                p._portObj.rts = True #ensure TTL is OFF to begin
-                p.burstTTL(self.win) #execute a stereotyped burst to mark the start of the stimulus in pulse mode
-            elif self.writeTTL == 'Sustained':
-                if not hasattr(self, 'portObj'):
-                    print('\n***NOTICE: stimulus ', i, 'was skipped because a TTL write method was selected, but no port has been connected to.')
-                    continue
-                p._portObj = self.portObj
-                p._portObj.rts = True #ensure TTL is OFF to begin
-                p._TTLON = False #used to track state of sustained TTL pulses                
-               
-                if self.ttlBookmarks: #Run the bookmark before the start of each stimulus: this is 1 frame on, 2 frames off, 3 frames on, 4 frames Off, 5 frames On, 6 frames Off at the frame frate of self.win The port should end in the off position again. Range is not inclusive
-                    self.win.flip() #brief pause at frame rate in case there was just another flip from the previous stimulus (e.g., on the last frame of the previous stimulus)
-                    for bookmarkStep in range(1, 7):
-                        p.sendTTL(bookmark = True)
-                        for m in range(bookmarkStep): #flip a number of frames that is equal to the iteration number
-                            self.win.flip()
-                    
-                    #just ensure that the TTL pulse is actually off:
-                    if p._TTLON:            
-                        p.sendTTL(bookmark = True)
-                    
+                #set up the TTL ports based on the mode.
+                if self.writeTTL == 'Pulse':
+                    if not hasattr(self, 'portObj'):
+                        print('\n***NOTICE: stimulus ', i, 'was skipped because a TTL write method was selected, but no port has been connected to.')
+                        continue
+                    p._portObj = self.portObj #initialize portObj for sending TTL pulses
+                    p._portObj.rts = True #ensure TTL is OFF to begin
+                    p.burstTTL(self.win) #execute a stereotyped burst to mark the start of the stimulus in pulse mode
+                elif self.writeTTL == 'Sustained':
+                    if not hasattr(self, 'portObj'):
+                        print('\n***NOTICE: stimulus ', i, 'was skipped because a TTL write method was selected, but no port has been connected to.')
+                        continue
+                    p._portObj = self.portObj
+                    p._portObj.rts = True #ensure TTL is OFF to begin
+                    p._TTLON = False #used to track state of sustained TTL pulses                
+                   
+                    if self.ttlBookmarks: #Run the bookmark before the start of each stimulus: this is 1 frame on, 2 frames off, 3 frames on, 4 frames Off, 5 frames On, 6 frames Off at the frame frate of self.win The port should end in the off position again. Range is not inclusive
+                        self.win.flip() #brief pause at frame rate in case there was just another flip from the previous stimulus (e.g., on the last frame of the previous stimulus)
+                        for bookmarkStep in range(1, 7):
+                            p.sendTTL(bookmark = True)
+                            for m in range(bookmarkStep): #flip a number of frames that is equal to the iteration number
+                                self.win.flip()
+                        
+                        #just ensure that the TTL pulse is actually off:
+                        if p._TTLON:            
+                            p.sendTTL(bookmark = True)
+                        
 
-            #run the protocol
-            p._sendEyeLinkMessage = self.sendEyeLinkMessage if self._elTracker is not None else None
-            p._elTracker = self._elTracker
-            p._okrLogDir = self._resolveEyeLinkSaveDir()
-            if self._elTracker is not None:
-                safeName = displayName.replace(' ', '_')
-                self.sendEyeLinkMessage('TRIALID {n}_{name}'.format(n=i + 1, name=safeName))
-                self.sendEyeLinkMessage('!V TRIAL_VAR protocol {name}'.format(name=str(name).replace(' ', '_')))
-                self.sendEyeLinkMessage('!V TRIAL_VAR suffix {suf}'.format(suf=str(suffix).replace(' ', '_')))
-                if not getattr(p, '_okrSyncsTrialClock', False):
-                    self.sendEyeLinkMessage('SYNCTIME')
-            p.run(self.win, (self.useInformationMonitor, self.informationWin)) #send informationMonitor information as a tuple: bool (whether to use), window object
-            if self._elTracker is not None:
-                self.sendEyeLinkMessage('TRIAL_RESULT 0')
-            
-            #Make sure TTL port is turned OFF if running in sustained mode (it's often left on if the user quits a stimulus early)
-            if self.writeTTL == 'Sustained' and p._TTLON:
-                p.sendTTL()
-                                
-            #print the timing report if the user asks for it
-            if p._timingReport:
-                p.reportTime(displayName)
-               
+                #run the protocol
+                p._sendEyeLinkMessage = self.sendEyeLinkMessage if self._elTracker is not None else None
+                p._elTracker = self._elTracker
+                p._okrLogDir = self._resolveEyeLinkSaveDir()
+                p._okrSessionClock = self._okrSessionClock
+                p._okrSessionEvents = self._okrSessionEvents
+                p._okrSessionEventCounter = self._okrSessionEventCounter
+                p._okrSessionProtocolIndex = i + 1
+                if self._elTracker is not None:
+                    safeName = displayName.replace(' ', '_')
+                    self.sendEyeLinkMessage('TRIALID {n}_{name}'.format(n=i + 1, name=safeName))
+                    self.sendEyeLinkMessage('!V TRIAL_VAR protocol {name}'.format(name=str(name).replace(' ', '_')))
+                    self.sendEyeLinkMessage('!V TRIAL_VAR suffix {suf}'.format(suf=str(suffix).replace(' ', '_')))
+                    if not getattr(p, '_okrSyncsTrialClock', False):
+                        self.sendEyeLinkMessage('SYNCTIME')
+                p.run(self.win, (self.useInformationMonitor, self.informationWin)) #send informationMonitor information as a tuple: bool (whether to use), window object
+                if self._elTracker is not None:
+                    self.sendEyeLinkMessage('TRIAL_RESULT 0')
+                
+                #Make sure TTL port is turned OFF if running in sustained mode (it's often left on if the user quits a stimulus early)
+                if self.writeTTL == 'Sustained' and p._TTLON:
+                    p.sendTTL()
+                                    
+                #print the timing report if the user asks for it
+                if p._timingReport:
+                    p.reportTime(displayName)
+                   
 
-            #write down properties from previous stimulus
-            protocolProperties = vars(p)
-            protocolProperties.pop('_informationWin', None) #can't save ongoing psychopy win so remove it
-            protocolProperties.pop('_elTracker', None)
-            protocolProperties.pop('_sendEyeLinkMessage', None)
-            protocolProperties.pop('_okrLogDir', None)
-            self.loggedStimuli.append(protocolProperties)
+                #write down properties from previous stimulus
+                protocolProperties = vars(p)
+                protocolProperties.pop('_informationWin', None) #can't save ongoing psychopy win so remove it
+                protocolProperties.pop('_elTracker', None)
+                protocolProperties.pop('_sendEyeLinkMessage', None)
+                protocolProperties.pop('_okrLogDir', None)
+                protocolProperties.pop('_okrSessionClock', None)
+                protocolProperties.pop('_okrSessionEvents', None)
+                protocolProperties.pop('_okrSessionEventCounter', None)
+                protocolProperties.pop('_okrSessionProtocolIndex', None)
+                protocolProperties.pop('_okrProtocolSessionZero', None)
+                self.loggedStimuli.append(protocolProperties)
+        finally:
+            sessionLogPath = self._writeOkrSessionLogFile()
+            if sessionLogPath is not None:
+                print('--> Wrote OKR session condition log:', sessionLogPath)

@@ -241,6 +241,15 @@ class ContrastDots(protocol):
             'usePersistentDots': int(self._usePersistentDots()),
             'isAnchor100': isAnchor100,
         })
+        self._recordOkrSessionEvent(
+            'ContrastBlock', startTime, endTime,
+            direction=directionLabel,
+            contrastLevel=contrast,
+            blockOrEpochIndex=blockIndex,
+            dotColor=dotColor,
+            usePersistentDots=int(self._usePersistentDots()),
+            isAnchor100=isAnchor100,
+        )
         self._sendOkrEyeLinkMessage(
             'OKR ContrastBlock B{bi} contrast {c:g} dir {d} {t0:.3f}-{t1:.3f}'.format(
                 bi=blockIndex, c=contrast, d=directionLabel, t0=startTime, t1=endTime,
@@ -262,6 +271,10 @@ class ContrastDots(protocol):
             'usePersistentDots': 'NA',
             'isAnchor100': 'NA',
         })
+        self._recordOkrSessionEvent(
+            'FixationITI', startTime, endTime,
+            blockOrEpochIndex=blockIndex,
+        )
         self._sendOkrEyeLinkMessage(
             'OKR FixationITI after B{bi} {t0:.3f}-{t1:.3f}'.format(
                 bi=blockIndex, t0=startTime, t1=endTime,

@@ -179,15 +179,55 @@ class protocol():
         numPixelsWide = mon.currentCalib['sizePix'][0]
         cmWide = mon.currentCalib['width']
         totalVisualDegrees = 2*math.degrees(math.atan((cmWide/2)/eyeDistance))
+        print("totalVisualDegrees", totalVisualDegrees)
         return numPixelsWide/totalVisualDegrees
 
     def _startTrialClock(self):
         '''Start protocol timing and align EyeLink SYNCTIME with t=0 for OKR logs.'''
         trialClock = core.Clock()
+        sessionClock = getattr(self, '_okrSessionClock', None)
+        if sessionClock is not None:
+            # Map this protocol's t=0 onto the continuous experiment/session clock.
+            self._okrProtocolSessionZero = sessionClock.getTime()
+        else:
+            self._okrProtocolSessionZero = None
         sendMessage = getattr(self, '_sendEyeLinkMessage', None)
         if sendMessage is not None:
             sendMessage('SYNCTIME')
         return trialClock
+
+    def _recordOkrSessionEvent(self, eventType, startTime, endTime, **fields):
+        '''
+        Append one condition interval to the experiment-wide OKR session log.
+        startTime/endTime are protocol-local seconds since this protocol's SYNCTIME.
+        '''
+        sessionEvents = getattr(self, '_okrSessionEvents', None)
+        sessionZero = getattr(self, '_okrProtocolSessionZero', None)
+        if sessionEvents is None or sessionZero is None:
+            return
+        sessionCounter = getattr(self, '_okrSessionEventCounter', None)
+        if sessionCounter is None:
+            return
+        sessionCounter[0] += 1
+        row = {
+            'eventIndex': sessionCounter[0],
+            'protocolIndex': getattr(self, '_okrSessionProtocolIndex', 'NA'),
+            'protocolName': str(self.protocolName).replace(' ', '_'),
+            'eventType': eventType,
+            'startTime': sessionZero + startTime,
+            'endTime': sessionZero + endTime,
+            'protocolStartTime': startTime,
+            'protocolEndTime': endTime,
+            'direction': fields.get('direction', 'NA'),
+            'contrastLevel': fields.get('contrastLevel', 'NA'),
+            'logMAR': fields.get('logMAR', 'NA'),
+            'blockOrEpochIndex': fields.get('blockOrEpochIndex', 'NA'),
+            'sweep': fields.get('sweep', 'NA'),
+            'dotColor': fields.get('dotColor', 'NA'),
+            'usePersistentDots': fields.get('usePersistentDots', 'NA'),
+            'isAnchor100': fields.get('isAnchor100', 'NA'),
+        }
+        sessionEvents.append(row)
     
     def showInformationText(self, stimWin, txt):
         '''

@@ -8,6 +8,8 @@ Created on Fri Jul 16 12:09:17 2021
 from protocols.protocol import protocol
 from psychopy import core, visual, data, event, monitors
 from psychopy.hardware import keyboard
+from datetime import datetime
+from pathlib import Path
 import numpy as np
 import serial, random, math, time, asyncio, os
 
@@ -20,6 +22,8 @@ except:
     print("g3pylib couldn't be imported! Tobii Glasses3 eye-tracking data will not be synced to stimulus events")
 
 class VisualAcuityDots(protocol):
+    _okrSyncsTrialClock = True
+
     def __init__(self):
         super().__init__()
         self.protocolName = 'Visual Acuity Dots' #The VisualAcuityDots protocol presents an evenly spaced array of moving dots that increase and decrease in size over time.
@@ -90,7 +94,118 @@ class VisualAcuityDots(protocol):
         if angle >= 360.0:
             angle -= 360.0*factor
         return angle
-    
+
+    def _directionLabel(self, direction=None):
+        '''Map motion direction (degrees) to slowphase-okr direction names.'''
+        angle = self.deg0to360(self.orientations[0] if direction is None else direction)
+        if 45.0 <= angle < 135.0:
+            return 'Up'
+        if 135.0 <= angle < 225.0:
+            return 'Down'
+        if 225.0 <= angle < 315.0:
+            return 'Left'
+        return 'Right'
+
+    def _nextOkrEventIndex(self, counter):
+        counter[0] += 1
+        return counter[0]
+
+    def _sendOkrEyeLinkMessage(self, text):
+        sendMessage = getattr(self, '_sendEyeLinkMessage', None)
+        if sendMessage is not None:
+            sendMessage(text)
+
+    def _appendOkrLogMARStep(self, events, counter, epochIndex, sweepLabel, logMAR, direction, startTime, endTime):
+        eventIndex = self._nextOkrEventIndex(counter)
+        directionLabel = self._directionLabel(direction)
+        events.append({
+            'eventIndex': eventIndex,
+            'eventType': 'LogMARStep',
+            'epochIndex': epochIndex,
+            'sweep': sweepLabel,
+            'startTime': startTime,
+            'endTime': endTime,
+            'direction': directionLabel,
+            'logMAR': logMAR,
+        })
+        self._recordOkrSessionEvent(
+            'LogMARStep', startTime, endTime,
+            direction=directionLabel,
+            logMAR=logMAR,
+            blockOrEpochIndex=epochIndex,
+            sweep=sweepLabel,
+        )
+        self._sendOkrEyeLinkMessage(
+            'OKR LogMARStep E{ei} {sw} logMAR {m:g} dir {d} {t0:.3f}-{t1:.3f}'.format(
+                ei=epochIndex, sw=sweepLabel, m=logMAR, d=directionLabel,
+                t0=startTime, t1=endTime,
+            ),
+        )
+
+    def _appendOkrFixation(self, events, counter, epochIndex, sweepLabel, startTime, endTime):
+        eventIndex = self._nextOkrEventIndex(counter)
+        events.append({
+            'eventIndex': eventIndex,
+            'eventType': 'FixationITI',
+            'epochIndex': epochIndex,
+            'sweep': sweepLabel,
+            'startTime': startTime,
+            'endTime': endTime,
+            'direction': 'NA',
+            'logMAR': 'NA',
+        })
+        self._recordOkrSessionEvent(
+            'FixationITI', startTime, endTime,
+            blockOrEpochIndex=epochIndex,
+            sweep=sweepLabel,
+        )
+        self._sendOkrEyeLinkMessage(
+            'OKR FixationITI after E{ei} {sw} {t0:.3f}-{t1:.3f}'.format(
+                ei=epochIndex, sw=sweepLabel, t0=startTime, t1=endTime,
+            ),
+        )
+
+    def _writeOkrLogFile(self, events):
+        if not events:
+            return None
+        logDir = getattr(self, '_okrLogDir', None)
+        if logDir is None:
+            logDir = Path.cwd()
+        else:
+            logDir = Path(logDir)
+        logDir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        safeName = str(self.protocolName).replace(' ', '_')
+        logPath = logDir / ('OKR_Log_{name}_{stamp}.txt'.format(
+            name=safeName, stamp=stamp,
+        ))
+        directionText = ', '.join('{g:g}'.format(g=d) for d in self.orientations)
+        headerLines = [
+            '# OKR Condition Log',
+            '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
+            '# TimeBase: seconds from EyeLink SYNCTIME (sent when stimulus timing clock starts, after setup)',
+            '# DirectionsDeg: {dirs}'.format(dirs=directionText),
+            '# LowerLogMAR: {v:g}'.format(v=self.lowerLogMAR),
+            '# UpperLogMAR: {v:g}'.format(v=self.upperLogMAR),
+            '# StepSize: {v:g}'.format(v=self.stepSize),
+            '# StepTime: {v:g}'.format(v=self.stepTime),
+            'eventIndex\teventType\tepochIndex\tsweep\tstartTime\tendTime\tdirection\tlogMAR',
+        ]
+        rowLines = []
+        for event in events:
+            rowLines.append('\t'.join([
+                str(event['eventIndex']),
+                event['eventType'],
+                str(event['epochIndex']),
+                str(event['sweep']),
+                '{:.6f}'.format(event['startTime']),
+                '{:.6f}'.format(event['endTime']),
+                str(event['direction']),
+                str(event['logMAR']),
+            ]))
+        logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
+        return logPath
+
     def logMAR2Pix(self, logMAR, pixPerDeg):
         # pixW = 28 # arbitrary diameter of circle when logMAR = 1.0
         # pix = pixW * 10 ** (logMAR - 1)
@@ -214,18 +329,19 @@ class VisualAcuityDots(protocol):
         )
 
         debugLineLen = 2*math.degrees(math.atan((0.05/2)/0.75)) * pixPerDeg
-        print("line len", debugLineLen)
+        # print("line len", debugLineLen)
         debugLine = visual.Line(win=win, start=(-debugLineLen/2, 0), end=(debugLineLen/2, 0), units="pix")
 
         self.createOrientationLog()
         
         epochNum = 0
-        trialClock = core.Clock() #this will reset every trial
-
         kb = keyboard.Keyboard()
+        okrEvents = []
+        okrEventCounter = [0]
 
         await self.connectGlasses()
         await self.startRecording()
+        trialClock = self._startTrialClock()
         try:
             for stim in range(self.stimulusReps):
                 epochNum += 1
@@ -242,6 +358,7 @@ class VisualAcuityDots(protocol):
 
                 win.color = self.backgroundColor
                 for sweep in range(2):
+                    sweepLabel = 'Ascending' if sweep == 0 else 'Descending'
                     #pretime... nothing happens
                     self._stimulusStartLog.append(trialClock.getTime())
                     self.sendTTL()
@@ -261,18 +378,32 @@ class VisualAcuityDots(protocol):
                     else:
                         await self.sendEventData("Descending sweep", {})
 
+                    stepStart = None
+                    currentLogMAR = logMARs[index]
                     for f in range(self._sweepTimeNumFrames):
                         count += 1
                         if count >= self._stepTimeNumFrames:
-                            if sweep == 0 and index < logMARs.size - 1:
-                                index += 1
-                            elif sweep == 1 and index > 0: 
-                                index -= 1
-                            logMAR = logMARs[index]
-                            diameters[:] = self.logMAR2Pix(logMAR, pixPerDeg)
-                            dots.sizes = diameters
-                            surroundDots.sizes = diameters * self.ratio
                             count = 0
+                            canStep = (
+                                (sweep == 0 and index < logMARs.size - 1)
+                                or (sweep == 1 and index > 0)
+                            )
+                            if canStep:
+                                if stepStart is not None:
+                                    self._appendOkrLogMARStep(
+                                        okrEvents, okrEventCounter, epochNum, sweepLabel,
+                                        currentLogMAR, ori, stepStart, trialClock.getTime(),
+                                    )
+                                    stepStart = None
+                                if sweep == 0:
+                                    index += 1
+                                else:
+                                    index -= 1
+                                logMAR = logMARs[index]
+                                currentLogMAR = logMAR
+                                diameters[:] = self.logMAR2Pix(logMAR, pixPerDeg)
+                                dots.sizes = diameters
+                                surroundDots.sizes = diameters * self.ratio
 
                         keyPressed = kb.getKeys()
                         if keyPressed:
@@ -285,9 +416,22 @@ class VisualAcuityDots(protocol):
                         surroundDots.draw()
                         dots.draw()
                         win.flip()
+                        if stepStart is None:
+                            stepStart = trialClock.getTime()
 
                         if self.checkQuitOrPause():
+                            if stepStart is not None:
+                                self._appendOkrLogMARStep(
+                                    okrEvents, okrEventCounter, epochNum, sweepLabel,
+                                    currentLogMAR, ori, stepStart, trialClock.getTime(),
+                                )
                             return
+                    
+                    if stepStart is not None:
+                        self._appendOkrLogMARStep(
+                            okrEvents, okrEventCounter, epochNum, sweepLabel,
+                            currentLogMAR, ori, stepStart, trialClock.getTime(),
+                        )
                     
                     #tail time
                     await self.sendEventData("Tail time", {})
@@ -300,11 +444,25 @@ class VisualAcuityDots(protocol):
                     
                     #pause for inter stimulus interval
                     await self.sendEventData("Fixation interval", {})
+                    fixationStart = None
                     for f in range(self._interStimulusIntervalNumFrames):
                         fixationCross.draw()
                         win.flip()
+                        if fixationStart is None:
+                            fixationStart = trialClock.getTime()
                         if self.checkQuitOrPause():
+                            if fixationStart is not None:
+                                self._appendOkrFixation(
+                                    okrEvents, okrEventCounter, epochNum, sweepLabel,
+                                    fixationStart, trialClock.getTime(),
+                                )
                             return
+
+                    if fixationStart is not None:
+                        self._appendOkrFixation(
+                            okrEvents, okrEventCounter, epochNum, sweepLabel,
+                            fixationStart, trialClock.getTime(),
+                        )
             
                 self._stimulusEndLog.append(trialClock.getTime())
                 self.sendTTL()
@@ -312,6 +470,9 @@ class VisualAcuityDots(protocol):
                 self._numberOfEpochsCompleted += 1
         finally:
             await self.stopRecording()
+            okrLogPath = self._writeOkrLogFile(okrEvents)
+            if okrLogPath is not None:
+                print('--> Wrote OKR condition log for slowphase-okr:', okrLogPath)
 
         self._completed = 1
 
