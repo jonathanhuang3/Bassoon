@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Contrast Dots presents coherent moving dots on a gray background, followed by
-a red fixation cross.
+Contrast Dots presents coherent moving dots on a gray background, then an
+optional gray blank for afternystagmus, then a red fixation cross.
 """
 from protocols.protocol import protocol
 from psychopy import visual, event
@@ -21,7 +21,8 @@ class ContrastDots(protocol):
         self.interStimulusInterval = 0.0 #seconds - wait time between epochs
         self.preTime = 0.0 #seconds - stationary period before dot motion
         self.stimTime = 20.0 #seconds - moving dots are shown for this duration
-        self.tailTime = 4.0 #seconds - red fixation cross after dot motion
+        self.postStimTime = 2.0 #seconds - gray background after dots end, before the red cross (for OKR afternystagmus)
+        self.tailTime = 4.0 #seconds - red fixation cross after the post-stim gray blank
         self.backgroundColor = [0.0, 0.0, 0.0] #gray background (in RGB, -1 to 1)
 
         # Dot parameters
@@ -62,6 +63,9 @@ class ContrastDots(protocol):
         if self.spawnStagger < 0:
             tf = False
             errorMessage.append('Spawn Stagger must be 0 or greater.')
+        if getattr(self, 'postStimTime', 2.0) < 0:
+            tf = False
+            errorMessage.append('Post Stim Time must be 0 or greater.')
         if len(self.contrasts) == 0:
             tf = False
             errorMessage.append('Contrasts must contain at least one value.')
@@ -93,7 +97,14 @@ class ContrastDots(protocol):
 
 
     def estimateTime(self):
-        timePerEpoch = self.preTime + self.stimTime + self.tailTime + self.interStimulusInterval
+        postStimTime = getattr(self, 'postStimTime', 2.0)
+        timePerEpoch = (
+            self.preTime
+            + self.stimTime
+            + postStimTime
+            + self.tailTime
+            + self.interStimulusInterval
+        )
         numberOfEpochs = self.stimulusReps * len(self.contrasts) * len(self._directionPool())
         self._estimatedTime = timePerEpoch * numberOfEpochs
         return self._estimatedTime
@@ -257,6 +268,31 @@ class ContrastDots(protocol):
         )
 
 
+    def _appendOkrAfternystagmus(self, events, counter, blockIndex, startTime, endTime):
+        eventIndex = self._nextOkrEventIndex(counter)
+        events.append({
+            'eventIndex': eventIndex,
+            'eventType': 'Afternystagmus',
+            'contrastBlockIndex': blockIndex,
+            'startTime': startTime,
+            'endTime': endTime,
+            'direction': 'NA',
+            'contrastLevel': 'NA',
+            'dotColor': 'NA',
+            'usePersistentDots': 'NA',
+            'isAnchor100': 'NA',
+        })
+        self._recordOkrSessionEvent(
+            'Afternystagmus', startTime, endTime,
+            blockOrEpochIndex=blockIndex,
+        )
+        self._sendOkrEyeLinkMessage(
+            'OKR Afternystagmus after B{bi} {t0:.3f}-{t1:.3f}'.format(
+                bi=blockIndex, t0=startTime, t1=endTime,
+            ),
+        )
+
+
     def _appendOkrFixation(self, events, counter, blockIndex, startTime, endTime):
         eventIndex = self._nextOkrEventIndex(counter)
         events.append({
@@ -379,8 +415,13 @@ class ContrastDots(protocol):
         self._informationWin = informationWin
         self.getFR(win)
 
+        if not hasattr(self, 'postStimTime'):
+            self.postStimTime = 2.0
+
         self._interStimulusIntervalNumFrames = round(self._FR * self.interStimulusInterval)
         self._actualInterStimulusInterval = self._interStimulusIntervalNumFrames * (1 / self._FR)
+        self._postStimTimeNumFrames = round(self._FR * self.postStimTime)
+        self._actualPostStimTime = self._postStimTimeNumFrames * (1 / self._FR)
 
         random.seed(self.randomSeed)
         pixPerDeg = self.getPixPerDeg(win.monitor)
@@ -503,6 +544,26 @@ class ContrastDots(protocol):
                     okrEvents, okrEventCounter, blockIndex, contrast, blockDirection,
                     motionStart, motionEnd,
                 )
+
+                # Gray blank for OKR afternystagmus (no dots, no fixation cross)
+                afternystagmusStart = None
+                for f in range(self._postStimTimeNumFrames):
+                    win.flip()
+                    if afternystagmusStart is None:
+                        afternystagmusStart = trialClock.getTime()
+                    if self.checkQuitOrPause():
+                        if afternystagmusStart is not None:
+                            self._appendOkrAfternystagmus(
+                                okrEvents, okrEventCounter, blockIndex,
+                                afternystagmusStart, trialClock.getTime(),
+                            )
+                        return
+
+                if afternystagmusStart is not None:
+                    self._appendOkrAfternystagmus(
+                        okrEvents, okrEventCounter, blockIndex,
+                        afternystagmusStart, trialClock.getTime(),
+                    )
 
                 fixationStart = None
                 for f in range(self._tailTimeNumFrames):
