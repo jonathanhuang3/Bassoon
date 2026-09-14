@@ -235,7 +235,8 @@ class ContrastDots(protocol):
             sendMessage(text)
 
 
-    def _appendOkrContrastBlock(self, events, counter, blockIndex, contrast, direction, startTime, endTime):
+    def _appendOkrContrastBlock(self, events, counter, blockIndex, contrast, direction, startTime, endTime,
+                                baseDirection=None, directionOffset=None):
         eventIndex = self._nextOkrEventIndex(counter)
         directionLabel = self._directionLabel(direction)
         dotColor = self._dotColorLabel()
@@ -266,6 +267,12 @@ class ContrastDots(protocol):
                 bi=blockIndex, c=contrast, d=directionLabel, t0=startTime, t1=endTime,
             ),
         )
+
+
+    def _epochDirectionExtra(self, epoch):
+        '''Optional extra text for the on-screen epoch info (subclasses may override).'''
+        return ''
+
 
 
     def _appendOkrAfternystagmus(self, events, counter, blockIndex, startTime, endTime):
@@ -486,11 +493,12 @@ class ContrastDots(protocol):
                 if self._informationWin[0]:
                     self.showInformationText(
                         win,
-                        'Running {title}\nContrast = {c}\nDirection = {d:g}\u00b0 ({label})\nEpoch {n} of {total}'.format(
+                        'Running {title}\nContrast = {c}\nDirection = {d:g}\u00b0 ({label}){extra}\nEpoch {n} of {total}'.format(
                             title=self._stimulusTitle(),
                             c=contrast,
                             d=blockDirection,
                             label=self._directionLabel(blockDirection),
+                            extra=self._epochDirectionExtra(epoch),
                             n=epochNum,
                             total=totalEpochs,
                         ),
@@ -536,6 +544,8 @@ class ContrastDots(protocol):
                         self._appendOkrContrastBlock(
                             okrEvents, okrEventCounter, blockIndex, contrast, blockDirection,
                             motionStart, trialClock.getTime(),
+                            baseDirection=epoch.get('baseDirection', blockDirection),
+                            directionOffset=epoch.get('directionOffset', 0.0),
                         )
                         return
 
@@ -543,6 +553,8 @@ class ContrastDots(protocol):
                 self._appendOkrContrastBlock(
                     okrEvents, okrEventCounter, blockIndex, contrast, blockDirection,
                     motionStart, motionEnd,
+                    baseDirection=epoch.get('baseDirection', blockDirection),
+                    directionOffset=epoch.get('directionOffset', 0.0),
                 )
 
                 # Gray blank for OKR afternystagmus (no dots, no fixation cross)

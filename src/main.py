@@ -65,6 +65,7 @@ from protocols.HemifieldMaskDots import HemifieldMaskDots
 from protocols.CalibrationMonitor import CalibrationMonitor
 from protocols.VisualAcuityDots import VisualAcuityDots
 from protocols.CustomValidation import CustomValidation
+from protocols.OkrDirectionDots import OkrDirectionDots
 
 class Bassoon:
     def __init__(self, master):
