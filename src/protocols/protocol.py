@@ -151,16 +151,25 @@ class protocol():
         '''
         Determine the frame rate of the win object (e.g. stimulus monitor) and calculate number of frames and total time for each segment of the stimulus
         '''
-        
-        self._FR = win.getActualFrameRate()
-        
-        #On rare occasions (depending on the monitor) there appears to be a timing issue with win.getActialFrameRate().
-        #In such cases, you can keep querying until you get a numerical value other than None
-        #I've set a stop here after 1000 queries, which seems sufficient to prevent this error and avoids an infinite loopq
-        if self._FR is None:
-            count = 0
-            while self._FR is None and count < 1000:
-                self._FR = win.getActualFrameRate()
+        # Reuse a prior measurement on this window so later protocols (and EyeLink
+        # runs that skip FR at Window create) do not re-block for several seconds.
+        cached = getattr(win, '_bassoonMeasuredFR', None)
+        if cached:
+            self._FR = cached
+        else:
+            self._FR = win.getActualFrameRate(infoMsg='')
+
+            # On rare occasions (depending on the monitor) there appears to be a timing issue with win.getActualFrameRate().
+            # In such cases, you can keep querying until you get a numerical value other than None
+            # I've set a stop here after 1000 queries, which seems sufficient to prevent this error and avoids an infinite loop
+            if self._FR is None:
+                count = 0
+                while self._FR is None and count < 1000:
+                    self._FR = win.getActualFrameRate(infoMsg='')
+                    count += 1
+
+            if self._FR is not None:
+                win._bassoonMeasuredFR = self._FR
 
         self._preTimeNumFrames = round(self._FR*self.preTime)
         self._stimTimeNumFrames = round(self._FR*self.stimTime)
@@ -169,7 +178,6 @@ class protocol():
         self._actualPreTime = self._preTimeNumFrames * 1/self._FR
         self._actualStimTime = self._stimTimeNumFrames * 1/self._FR
         self._actualTailTime = self._tailTimeNumFrames * 1/self._FR
-        
     def getPixPerDeg(self, stimMonitor):
         '''
         determine the pixels per degree for the stimulus monitor

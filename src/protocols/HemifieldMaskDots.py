@@ -13,7 +13,6 @@ arcuate scotoma from a Humphrey visual field.
 import math
 
 import numpy as np
-from psychopy import visual
 
 from protocols.MaskDots import MaskDots
 
@@ -80,29 +79,20 @@ class HemifieldMaskDots(MaskDots):
         opacity = 1.0 - tunnel_clear * visible_hemifield
         return np.clip(opacity, 0.0, 1.0).astype(np.float32)
 
+    def _gazeMissingMessage(self):
+        return (
+            '*** Hemifield Mask Dots: No valid gaze sample yet; '
+            'holding mask at last position.'
+        )
+
+    def _trackerInactiveMessage(self):
+        return (
+            '*** Hemifield Mask Dots: EyeLink is not active. '
+            'The semicircle will stay at screen center.'
+        )
+
     def _initPerRunStimulus(self, win, pix_per_deg):
         self.blockedHemifield = str(self.blockedHemifield).strip().lower()
-        radius_pix = (self.tunnelVisibleDiameterDegrees / 2.0) * pix_per_deg
-        sigma_pix = self.tunnelEdgeSigmaDegrees * pix_per_deg
-        half_diagonal = math.hypot(win.size[0] / 2.0, win.size[1] / 2.0)
-        overlay_half_size = int(
-            math.ceil(half_diagonal + radius_pix + 4.0 * sigma_pix)
-        )
-        overlay_size_pix = overlay_half_size * 2
-        tex_size = 512
-        opacity = self._buildTunnelOpacityMap(tex_size, overlay_size_pix, pix_per_deg)
-        self._gazeMask = visual.ImageStim(
-            win,
-            image=np.ones((tex_size, tex_size), dtype=np.float32),
-            mask=opacity,
-            color=self.maskColor,
-            size=(overlay_size_pix, overlay_size_pix),
-            units='pix',
-            pos=(0.0, 0.0),
-            interpolate=True,
-        )
-        self._lastGaze = [0.0, 0.0]
-        self._gazeMaskWarningShown = False
         print(
             '--> Hemifield Mask Dots (severe hemifield defaults): blocking {side} '
             'hemifield, visible aperture diameter = {d:g}°, edge σ = {s:g}°.'.format(
@@ -111,23 +101,4 @@ class HemifieldMaskDots(MaskDots):
                 s=self.tunnelEdgeSigmaDegrees,
             )
         )
-        if getattr(self, '_elTracker', None) is None:
-            print(
-                '*** Hemifield Mask Dots: EyeLink is not active. '
-                'The semicircle will stay at screen center.'
-            )
-            self._gazeMaskWarningShown = True
-
-    def _renderDotsFrame(self, win, dots):
-        dots.draw()
-        gaze = self._readGazePix(win)
-        if gaze is not None:
-            self._lastGaze = list(gaze)
-        elif not self._gazeMaskWarningShown and getattr(self, '_elTracker', None) is not None:
-            print(
-                '*** Hemifield Mask Dots: No valid gaze sample yet; '
-                'holding mask at last position.'
-            )
-            self._gazeMaskWarningShown = True
-        self._gazeMask.pos = self._lastGaze
-        self._gazeMask.draw()
+        super()._initPerRunStimulus(win, pix_per_deg)

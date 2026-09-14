@@ -64,6 +64,7 @@ from protocols.MaskDots import MaskDots
 from protocols.HemifieldMaskDots import HemifieldMaskDots
 from protocols.CalibrationMonitor import CalibrationMonitor
 from protocols.VisualAcuityDots import VisualAcuityDots
+from protocols.CustomValidation import CustomValidation
 
 class Bassoon:
     def __init__(self, master):
@@ -796,6 +797,93 @@ class Bassoon:
         )
         eyeLinkCalTargetDropdown.grid(row=3, column=1, sticky='w')
 
+        self.experiment.syncEyeLinkAreaFromDegrees(monitor_name=self.experiment.stimMonitor)
+        calDeg = self.experiment.eyeLinkCalibrationAreaDegrees or [0.0, 0.0]
+        valDeg = self.experiment.eyeLinkValidationAreaDegrees or [0.0, 0.0]
+
+        eyeLinkCalAreaLabel = Label(eyeLinkFrame, text='Cal Area ±H / ±V (°)', padx=10)
+        eyeLinkCalAreaLabel.grid(row=4, column=0, sticky='w')
+        self.eyeLinkCalAreaHSelection = StringVar(root)
+        self.eyeLinkCalAreaHSelection.set('{:.1f}'.format(calDeg[0]))
+        self.eyeLinkCalAreaVSelection = StringVar(root)
+        self.eyeLinkCalAreaVSelection.set('{:.1f}'.format(calDeg[1]))
+        eyeLinkCalAreaHEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkCalAreaHSelection, width=6)
+        eyeLinkCalAreaHEntry.grid(row=4, column=1, sticky='w')
+        eyeLinkCalAreaVEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkCalAreaVSelection, width=6)
+        eyeLinkCalAreaVEntry.grid(row=4, column=2, sticky='w')
+
+        eyeLinkValAreaLabel = Label(eyeLinkFrame, text='Val Area ±H / ±V (°)', padx=10)
+        eyeLinkValAreaLabel.grid(row=5, column=0, sticky='w')
+        self.eyeLinkValAreaHSelection = StringVar(root)
+        self.eyeLinkValAreaHSelection.set('{:.1f}'.format(valDeg[0]))
+        self.eyeLinkValAreaVSelection = StringVar(root)
+        self.eyeLinkValAreaVSelection.set('{:.1f}'.format(valDeg[1]))
+        eyeLinkValAreaHEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkValAreaHSelection, width=6)
+        eyeLinkValAreaHEntry.grid(row=5, column=1, sticky='w')
+        eyeLinkValAreaVEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkValAreaVSelection, width=6)
+        eyeLinkValAreaVEntry.grid(row=5, column=2, sticky='w')
+
+        self.eyeLinkAreaDegLabel = Label(
+            eyeLinkFrame,
+            text='',
+            padx=10,
+            justify='left',
+            wraplength=520,
+        )
+        self.eyeLinkAreaDegLabel.grid(row=6, column=0, columnspan=4, sticky='w', pady=(6, 0))
+
+        def updateEyeLinkAreaDegLabel(*_args):
+            monitorName = self.stimMonitorSelection.get()
+            try:
+                calH = float(self.eyeLinkCalAreaHSelection.get())
+                calV = float(self.eyeLinkCalAreaVSelection.get())
+                valH = float(self.eyeLinkValAreaHSelection.get())
+                valV = float(self.eyeLinkValAreaVSelection.get())
+            except Exception:
+                self.eyeLinkAreaDegLabel.config(
+                    text='Enter ± extents from screen center in visual degrees (e.g. 15 = grid spans 30° total).'
+                )
+                return
+            monFov = self.experiment.getMonitorFovDegrees(monitorName)
+            if None in monFov:
+                self.eyeLinkAreaDegLabel.config(
+                    text='Could not read FOV for monitor "{name}" (check width/distance in Edit Monitors).'.format(
+                        name=monitorName,
+                    )
+                )
+                return
+            calProp = self.experiment.getEyeLinkAreaProportionFromDegrees([calH, calV], monitorName)
+            valProp = self.experiment.getEyeLinkAreaProportionFromDegrees([valH, valV], monitorName)
+            if calProp is None or valProp is None:
+                self.eyeLinkAreaDegLabel.config(
+                    text='Could not convert degrees to EyeLink proportions for monitor "{name}".'.format(
+                        name=monitorName,
+                    )
+                )
+                return
+            self.eyeLinkAreaDegLabel.config(
+                text=(
+                    'Monitor FOV ~{mH:.1f}° H × {mV:.1f}° V (from width & viewing distance)\n'
+                    'Cal ±{cEH:.1f}/±{cEV:.1f}° → total {cTH:.1f}°×{cTV:.1f}° (prop {cH:.2f}×{cV:.2f})    '
+                    'Val ±{vEH:.1f}/±{vEV:.1f}° → total {vTH:.1f}°×{vTV:.1f}° (prop {vH:.2f}×{vV:.2f})'
+                ).format(
+                    mH=monFov[0], mV=monFov[1],
+                    cEH=abs(calH), cEV=abs(calV),
+                    cTH=2.0 * abs(calH), cTV=2.0 * abs(calV),
+                    cH=calProp[0], cV=calProp[1],
+                    vEH=abs(valH), vEV=abs(valV),
+                    vTH=2.0 * abs(valH), vTV=2.0 * abs(valV),
+                    vH=valProp[0], vV=valProp[1],
+                )
+            )
+
+        self.eyeLinkCalAreaHSelection.trace_add('write', updateEyeLinkAreaDegLabel)
+        self.eyeLinkCalAreaVSelection.trace_add('write', updateEyeLinkAreaDegLabel)
+        self.eyeLinkValAreaHSelection.trace_add('write', updateEyeLinkAreaDegLabel)
+        self.eyeLinkValAreaVSelection.trace_add('write', updateEyeLinkAreaDegLabel)
+        self.stimMonitorSelection.trace_add('write', updateEyeLinkAreaDegLabel)
+        updateEyeLinkAreaDegLabel()
+
         eyeLinkFrame.columnconfigure(2, weight=1)
 
         buttonFrame = Frame(editFrame, pady=15)
@@ -1147,6 +1235,35 @@ class Bassoon:
         self.experiment.eyeLinkEDFDir = self.eyeLinkEDFDirSelection.get().strip()
         cal_target_value = self.eyeLinkCalTargetSelection.get().strip().lower()
         self.experiment.eyeLinkCalTarget = 'fish' if cal_target_value == 'fish' else 'standard'
+        try:
+            monitorName = self.stimMonitorSelection.get()
+            self.experiment.eyeLinkCalibrationAreaDegrees = self.experiment._normalizeAreaDegrees(
+                [
+                    float(self.eyeLinkCalAreaHSelection.get()),
+                    float(self.eyeLinkCalAreaVSelection.get()),
+                ],
+                monitor_name=monitorName,
+            )
+            self.experiment.eyeLinkValidationAreaDegrees = self.experiment._normalizeAreaDegrees(
+                [
+                    float(self.eyeLinkValAreaHSelection.get()),
+                    float(self.eyeLinkValAreaVSelection.get()),
+                ],
+                monitor_name=monitorName,
+            )
+            self.experiment.syncEyeLinkAreaFromDegrees(monitor_name=monitorName)
+            self.experiment.eyeLinkAreaDegreesAreHalfExtent = True
+            # Reflect clamped degree values back into the Options fields.
+            calDeg = self.experiment.eyeLinkCalibrationAreaDegrees
+            valDeg = self.experiment.eyeLinkValidationAreaDegrees
+            if calDeg is not None:
+                self.eyeLinkCalAreaHSelection.set('{:.1f}'.format(calDeg[0]))
+                self.eyeLinkCalAreaVSelection.set('{:.1f}'.format(calDeg[1]))
+            if valDeg is not None:
+                self.eyeLinkValAreaHSelection.set('{:.1f}'.format(valDeg[0]))
+                self.eyeLinkValAreaVSelection.set('{:.1f}'.format(valDeg[1]))
+        except Exception:
+            print('*** Could not update EyeLink cal/val ± area degrees. Check monitor width/distance and enter positive degree values.')
 
         print('\n--> New experiment settings have been applied')
 
@@ -1187,6 +1304,15 @@ class Bassoon:
                 "eyeLinkCalTarget": (
                     'fish' if self.eyeLinkCalTargetSelection.get().strip().lower() == 'fish' else 'standard'
                 ),
+                "eyeLinkCalibrationAreaDegrees": [
+                    float(self.eyeLinkCalAreaHSelection.get()),
+                    float(self.eyeLinkCalAreaVSelection.get()),
+                ],
+                "eyeLinkValidationAreaDegrees": [
+                    float(self.eyeLinkValAreaHSelection.get()),
+                    float(self.eyeLinkValAreaVSelection.get()),
+                ],
+                "eyeLinkAreaDegreesAreHalfExtent": True,
             }
         }
 
@@ -1196,6 +1322,46 @@ class Bassoon:
             configDict['experiment']['ttlPort'] = 'No Available Ports'
 
         #Once Dictionary is filled with preferences it can be converted to JSON and saved
+        try:
+            monitorName = self.stimMonitorSelection.get()
+            configDict['experiment']['eyeLinkCalibrationAreaDegrees'] = (
+                self.experiment._normalizeAreaDegrees(
+                    configDict['experiment']['eyeLinkCalibrationAreaDegrees'],
+                    monitor_name=monitorName,
+                )
+            )
+            configDict['experiment']['eyeLinkValidationAreaDegrees'] = (
+                self.experiment._normalizeAreaDegrees(
+                    configDict['experiment']['eyeLinkValidationAreaDegrees'],
+                    monitor_name=monitorName,
+                )
+            )
+            # Also store derived proportions for compatibility / debugging.
+            calProp = self.experiment.getEyeLinkAreaProportionFromDegrees(
+                configDict['experiment']['eyeLinkCalibrationAreaDegrees'],
+                monitor_name=monitorName,
+            )
+            valProp = self.experiment.getEyeLinkAreaProportionFromDegrees(
+                configDict['experiment']['eyeLinkValidationAreaDegrees'],
+                monitor_name=monitorName,
+            )
+            if calProp is not None:
+                configDict['experiment']['eyeLinkCalibrationAreaProportion'] = calProp
+            if valProp is not None:
+                configDict['experiment']['eyeLinkValidationAreaProportion'] = valProp
+        except Exception:
+            configDict['experiment']['eyeLinkCalibrationAreaDegrees'] = list(
+                self.experiment.eyeLinkCalibrationAreaDegrees or [0.0, 0.0]
+            )
+            configDict['experiment']['eyeLinkValidationAreaDegrees'] = list(
+                self.experiment.eyeLinkValidationAreaDegrees or [0.0, 0.0]
+            )
+            configDict['experiment']['eyeLinkCalibrationAreaProportion'] = list(
+                self.experiment.eyeLinkCalibrationAreaProportion
+            )
+            configDict['experiment']['eyeLinkValidationAreaProportion'] = list(
+                self.experiment.eyeLinkValidationAreaProportion
+            )
 
         with open("configOptions.json", 'w') as f:
             json.dump(configDict,f, indent=4)

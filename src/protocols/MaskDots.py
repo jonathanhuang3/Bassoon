@@ -5,9 +5,11 @@ aperture follows EyeLink gaze while the periphery is occluded with a soft
 Gaussian falloff using the gray background color.
 """
 import math
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
-from psychopy import visual
+from psychopy import core, visual
 
 from protocols.ContrastDots import ContrastDots
 
@@ -23,12 +25,19 @@ class MaskDots(ContrastDots):
         self.maskColor = [0.0, 0.0, 0.0]  # defaults to the gray background color
         self.persistentDots = True  # True = dots never respawn (infinite lifetime)
         self.contrasts = [1.0]  # single full-contrast block by default
+        self.logGazeLatency = True  # True = log per-frame gaze-contingent latency to a text file
 
     def _usePersistentDots(self):
         return bool(self.persistentDots)
 
     def _stimulusTitle(self):
         return 'Mask Dots'
+
+    def _gazeMissingMessage(self):
+        return '*** Mask Dots: No valid gaze sample yet; holding tunnel at last position.'
+
+    def _trackerInactiveMessage(self):
+        return '*** Mask Dots: EyeLink is not active. The tunnel will stay at screen center.'
 
     def internalValidation(self):
         tf, errorMessage = super().internalValidation()
@@ -42,11 +51,10 @@ class MaskDots(ContrastDots):
 
     def _readGazePix(self, win):
         '''Return the latest gaze position in PsychoPy pixel coordinates, or None.'''
-        tracker = getattr(self, '_elTracker', None)
+        tracker = self._tracker
         if tracker is None:
             return None
         try:
-            import pylink
             sample = tracker.getNewestSample()
             if sample is None:
                 return None
@@ -56,10 +64,12 @@ class MaskDots(ContrastDots):
                 gaze = sample.getRightEye().getGaze()
             else:
                 return None
-            if gaze[0] == pylink.MISSING_DATA or gaze[1] == pylink.MISSING_DATA:
+            if gaze[0] == self._missingData or gaze[1] == self._missingData:
                 return None
-            x = float(gaze[0]) - win.size[0] / 2.0
-            y = win.size[1] / 2.0 - float(gaze[1])
+            if self._pendingLatency is not None:
+                self._pendingLatency[1] = sample.getTime()
+            x = float(gaze[0]) - self._halfWidthPix
+            y = self._halfHeightPix - float(gaze[1])
             return (x, y)
         except Exception:
             return None
@@ -96,22 +106,180 @@ class MaskDots(ContrastDots):
             pos=(0.0, 0.0),
             interpolate=True,
         )
-        self._lastGaze = [0.0, 0.0]
+        self._lastGaze = (0.0, 0.0)
         self._gazeMaskWarningShown = False
-        if getattr(self, '_elTracker', None) is None:
-            print('*** Mask Dots: EyeLink is not active. The tunnel will stay at screen center.')
+        self._initGazeReadCache(win)
+        if self._tracker is None:
+            print(self._trackerInactiveMessage())
             self._gazeMaskWarningShown = True
+
+    def _initGazeReadCache(self, win):
+        '''
+        Resolve everything the per-frame gaze read needs once, so the work that
+        happens between reading gaze and flipping stays as small as possible.
+        '''
+        self._tracker = getattr(self, '_elTracker', None)
+        self._halfWidthPix = win.size[0] / 2.0
+        self._halfHeightPix = win.size[1] / 2.0
+        try:
+            import pylink
+            self._missingData = pylink.MISSING_DATA
+        except ImportError:
+            self._missingData = -32768
+
+        self._gazeLatencyRecords = []
+        self._gazeLatencySummary = {}
+        self._pendingLatency = None
+        self._lastFlipTime = None
+        self._gazeLatencyActive = bool(self.logGazeLatency) and self._tracker is not None
+        if bool(self.logGazeLatency) and self._tracker is None:
+            print('*** Gaze latency logging was requested, but EyeLink is not active. Skipping.')
+
+    def _recordFlipTime(self):
+        '''Runs immediately after the buffer swap, so it timestamps the presented frame.'''
+        self._lastFlipTime = core.getTime()
+
+    def _closePendingLatencyRecord(self):
+        '''Complete the previous frame's record now that its flip time is known.'''
+        pending = self._pendingLatency
+        self._pendingLatency = None
+        if pending is None or self._lastFlipTime is None:
+            return
+        pending[4] = self._lastFlipTime
+        self._gazeLatencyRecords.append(pending)
 
     def _renderDotsFrame(self, win, dots):
         dots.draw()
+        if self._gazeLatencyActive:
+            self._closePendingLatencyRecord()
+            win.callOnFlip(self._recordFlipTime)
+            # [readTime, sampleTimeMs, gazeX, gazeY, flipTime]
+            self._pendingLatency = [core.getTime(), None, None, None, None]
         gaze = self._readGazePix(win)
         if gaze is not None:
-            self._lastGaze = list(gaze)
-        elif not self._gazeMaskWarningShown and getattr(self, '_elTracker', None) is not None:
-            print('*** Mask Dots: No valid gaze sample yet; holding tunnel at last position.')
+            self._lastGaze = gaze
+            if self._pendingLatency is not None:
+                self._pendingLatency[2] = gaze[0]
+                self._pendingLatency[3] = gaze[1]
+        elif not self._gazeMaskWarningShown and self._tracker is not None:
+            print(self._gazeMissingMessage())
             self._gazeMaskWarningShown = True
         self._gazeMask.pos = self._lastGaze
         self._gazeMask.draw()
 
+    def _writeGazeLatencyLog(self):
+        records = [r for r in self._gazeLatencyRecords if r[4] is not None and r[1] is not None]
+        if not records:
+            return None
+
+        logDir = getattr(self, '_okrLogDir', None)
+        logDir = Path.cwd() if logDir is None else Path(logDir)
+        logDir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        logPath = logDir / ('{name}_GazeLatency_{stamp}.txt'.format(
+            name=self.protocolName, stamp=stamp,
+        ))
+
+        readTimes = np.array([r[0] for r in records], dtype=float)
+        sampleTimesMs = np.array([r[1] for r in records], dtype=float)
+        flipTimes = np.array([r[4] for r in records], dtype=float)
+
+        readToFlipMs = (flipTimes - readTimes) * 1000.0
+        # EyeLink sample times and the stimulus PC clock have different origins.
+        # The smallest observed (readTime - sampleTime) is the best estimate of a
+        # zero-age sample, so referencing to it gives sample age without a
+        # separate clock-sync handshake.
+        readMinusSampleMs = readTimes * 1000.0 - sampleTimesMs
+        sampleAgeMs = readMinusSampleMs - readMinusSampleMs.min()
+        totalMs = sampleAgeMs + readToFlipMs
+
+        droppedFrames = 0
+        if self._FR:
+            framePeriodMs = 1000.0 / self._FR
+            flipIntervalsMs = np.diff(flipTimes) * 1000.0
+            # Gaps longer than a few frames are epoch boundaries (fixation cross,
+            # inter-stimulus interval), not dropped frames.
+            withinEpoch = flipIntervalsMs < 10.0 * framePeriodMs
+            droppedFrames = int(np.count_nonzero(
+                withinEpoch & (flipIntervalsMs > 1.5 * framePeriodMs)
+            ))
+
+        def stats(values):
+            return {
+                'mean': float(np.mean(values)),
+                'median': float(np.median(values)),
+                'p95': float(np.percentile(values, 95)),
+                'max': float(np.max(values)),
+            }
+
+        self._gazeLatencySummary = {
+            'frames': int(len(records)),
+            'frameRateHz': float(self._FR) if self._FR else None,
+            'droppedFrames': droppedFrames,
+            'sampleAgeMs': stats(sampleAgeMs),
+            'readToFlipMs': stats(readToFlipMs),
+            'totalMs': stats(totalMs),
+        }
+
+        headerLines = [
+            '# Gaze-Contingent Latency Log',
+            '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
+            '# FrameRateHz: {fr:.3f}'.format(fr=self._FR) if self._FR else '# FrameRateHz: NA',
+            '# Frames: {n}'.format(n=len(records)),
+            '# DroppedFrames (flip interval > 1.5 frames): {n}'.format(n=droppedFrames),
+            '# sampleAgeMs: age of the newest EyeLink sample when it was read,',
+            '#   referenced to the freshest sample observed in this run (link + tracker delay).',
+            '# readToFlipMs: gaze read -> buffer swap that presented the updated mask.',
+            '# totalMs: sampleAgeMs + readToFlipMs. Display pixel response is NOT included;',
+            '#   measure that with a photodiode if an absolute number is needed.',
+            '# sampleTimeMs is EyeLink tracker time, so rows can be aligned to the EDF/ASC.',
+            'frame\tsampleTimeMs\tsampleAgeMs\treadToFlipMs\ttotalMs\tgazeX\tgazeY',
+        ]
+        rowLines = []
+        for i, record in enumerate(records):
+            rowLines.append('\t'.join([
+                str(i),
+                '{:.0f}'.format(sampleTimesMs[i]),
+                '{:.3f}'.format(sampleAgeMs[i]),
+                '{:.3f}'.format(readToFlipMs[i]),
+                '{:.3f}'.format(totalMs[i]),
+                'NA' if record[2] is None else '{:.2f}'.format(record[2]),
+                'NA' if record[3] is None else '{:.2f}'.format(record[3]),
+            ]))
+        logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
+
+        summary = self._gazeLatencySummary
+        print('--> Wrote gaze latency log:', logPath)
+        print(
+            '    Frames: {n}   Dropped: {d}   Frame rate: {fr:.1f} Hz'.format(
+                n=summary['frames'], d=summary['droppedFrames'],
+                fr=summary['frameRateHz'] if summary['frameRateHz'] else float('nan'),
+            )
+        )
+        for label, key in (
+            ('Sample age', 'sampleAgeMs'),
+            ('Read to flip', 'readToFlipMs'),
+            ('Total', 'totalMs'),
+        ):
+            s = summary[key]
+            print(
+                '    {label:<13} median {med:6.2f} ms   mean {mean:6.2f} ms   '
+                'p95 {p95:6.2f} ms   max {mx:6.2f} ms'.format(
+                    label=label, med=s['median'], mean=s['mean'],
+                    p95=s['p95'], mx=s['max'],
+                )
+            )
+        return logPath
+
     def _teardownPerRunStimulus(self):
+        if getattr(self, '_gazeLatencyActive', False):
+            self._closePendingLatencyRecord()
+            try:
+                self._writeGazeLatencyLog()
+            except Exception as e:
+                print('*** Could not write the gaze latency log (' + str(e) + ').')
+        # Per-frame records are dropped so they do not bloat the saved experiment file.
+        self._gazeLatencyRecords = []
+        self._pendingLatency = None
         self._gazeMask = None
+        self._tracker = None

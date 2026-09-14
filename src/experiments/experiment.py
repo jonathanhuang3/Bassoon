@@ -33,6 +33,11 @@ def _loadEyeLinkCoreGraphics():
 class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
     '''EyeLink graphics with visible defaults and GUI event pumping for Bassoon.'''
 
+    _CAL_TARGET_COLOR = [1.0, -1.0, -1.0]  # red outer ring (PsychoPy RGB -1..1)
+    _CAL_TARGET_INNER_COLOR = [-1.0, -1.0, -1.0]  # black center, matches Custom Validation
+    _CAL_TARGET_SIZE_DEG = 0.5
+    _CAL_TARGET_INNER_SIZE_DEG = 0.15
+
     def __init__(
         self,
         tracker,
@@ -50,16 +55,23 @@ class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
         super().__init__(tracker, win, disableAudio=True)
         self._gui_root = gui_root
         # Built-in defaults are black-on-black until the Host sends colors.
-        bg = list(win.color) if hasattr(win.color, '__len__') else [-1, -1, -1]
-        self.setCalibrationColors([1, 1, 1], bg)
+        bg = list(win.color) if hasattr(win.color, '__len__') else [0.0, 0.0, 0.0]
+        self.setCalibrationColors(self._CAL_TARGET_COLOR, bg)
         if self._cal_target_mode == 'fish':
             fish_path = Path(self._fish_image_path) if self._fish_image_path else None
             if fish_path is None or not fish_path.is_file():
                 print('*** Fish calibration image not found; using standard target.')
                 self._cal_target_mode = 'standard'
+                self.setTargetType('circle')
+                if self._pix_per_deg:
+                    self.setTargetSize(self._CAL_TARGET_SIZE_DEG * self._pix_per_deg)
             else:
                 self.setTargetType('picture')
                 self.setPictureTarget(str(fish_path))
+        else:
+            self.setTargetType('circle')
+            if self._pix_per_deg:
+                self.setTargetSize(self._CAL_TARGET_SIZE_DEG * self._pix_per_deg)
         self.update_cal_target()
 
     def _pumpGuiEvents(self):
@@ -85,11 +97,21 @@ class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
             nat_w, nat_h = self._calibTar.size
             if nat_h > 0:
                 self._calibTar.size = (width_px, width_px * (nat_h / nat_w))
+        elif self._cal_target_mode == 'standard':
+            # Red outer + black center, matching Custom Validation targets.
+            if getattr(self, '_tarOuter', None) is not None and self._pix_per_deg:
+                size_px = self._CAL_TARGET_SIZE_DEG * self._pix_per_deg
+                self._tarOuter.size = size_px
+                self._tarOuter.color = self._CAL_TARGET_COLOR
+            if getattr(self, '_tarInner', None) is not None and self._pix_per_deg:
+                inner_px = self._CAL_TARGET_INNER_SIZE_DEG * self._pix_per_deg
+                self._tarInner.size = inner_px
+                self._tarInner.color = self._CAL_TARGET_INNER_COLOR
 
     def draw_cal_target(self, x, y):
         fg = self.getForegroundColor()
-        if fg in ('black', 'Black', [-1, -1, -1], (0, 0, 0)):
-            self.setCalibrationColors([1, 1, 1], self.getBackgroundColor())
+        if fg in ('black', 'Black', [-1, -1, -1], (0, 0, 0), [1, 1, 1], (1, 1, 1)):
+            self.setCalibrationColors(self._CAL_TARGET_COLOR, self.getBackgroundColor())
             self.update_cal_target()
         print('--> EyeLink calibration target at ({x}, {y})'.format(
             x=int(x), y=int(y)))
@@ -146,6 +168,14 @@ class experiment():
         self.eyeLinkEDF = 'BASS.EDF' # Host filename, 8 chars + .EDF
         self.eyeLinkEDFDir = '' # folder on the Bassoon PC for downloaded EDFs; empty means current working directory
         self.eyeLinkCalTarget = 'standard' # 'standard' (circles) or 'fish' (1 deg fish icon)
+        # EyeLink cal/val grid size as ± visual degrees from screen center (H, V).
+        # Total grid width/height = 2× these values. Converted to EyeLink proportions via monitor FOV.
+        self.eyeLinkCalibrationAreaDegrees = None
+        self.eyeLinkValidationAreaDegrees = None
+        self.eyeLinkAreaDegreesAreHalfExtent = True # True once degrees mean ± from center (not full span)
+        # Derived EyeLink host proportions (0.2–1.0). Kept in sync from degrees; still sent to the tracker.
+        self.eyeLinkCalibrationAreaProportion = [0.88, 0.83]
+        self.eyeLinkValidationAreaProportion = [0.88, 0.83]
         self.eyeLinkEdf2AscPath = '' # optional full path to edf2asc.exe; empty means auto-detect
         self.eyeLinkWriteAsc = True # convert downloaded EDF to ASC after each EyeLink session
         self._elTracker = None
@@ -193,6 +223,21 @@ class experiment():
                     self.eyeLinkEDF = configOptions['experiment'].get('eyeLinkEDF', 'BASS.EDF')
                     self.eyeLinkEDFDir = configOptions['experiment'].get('eyeLinkEDFDir', '')
                     self.eyeLinkCalTarget = configOptions['experiment'].get('eyeLinkCalTarget', 'standard')
+                    self.eyeLinkCalibrationAreaDegrees = configOptions['experiment'].get(
+                        'eyeLinkCalibrationAreaDegrees', None,
+                    )
+                    self.eyeLinkValidationAreaDegrees = configOptions['experiment'].get(
+                        'eyeLinkValidationAreaDegrees', None,
+                    )
+                    self.eyeLinkAreaDegreesAreHalfExtent = configOptions['experiment'].get(
+                        'eyeLinkAreaDegreesAreHalfExtent', False,
+                    )
+                    self.eyeLinkCalibrationAreaProportion = configOptions['experiment'].get(
+                        'eyeLinkCalibrationAreaProportion', [0.88, 0.83],
+                    )
+                    self.eyeLinkValidationAreaProportion = configOptions['experiment'].get(
+                        'eyeLinkValidationAreaProportion', [0.88, 0.83],
+                    )
                     self.eyeLinkEdf2AscPath = configOptions['experiment'].get('eyeLinkEdf2AscPath', '')
                     self.eyeLinkWriteAsc = configOptions['experiment'].get('eyeLinkWriteAsc', True)
                 except:
@@ -209,6 +254,11 @@ class experiment():
             'eyeLinkEDF': 'BASS.EDF',
             'eyeLinkEDFDir': '',
             'eyeLinkCalTarget': 'standard',
+            'eyeLinkCalibrationAreaDegrees': None,
+            'eyeLinkValidationAreaDegrees': None,
+            'eyeLinkAreaDegreesAreHalfExtent': False,
+            'eyeLinkCalibrationAreaProportion': [0.88, 0.83],
+            'eyeLinkValidationAreaProportion': [0.88, 0.83],
             'eyeLinkEdf2AscPath': '',
             'eyeLinkWriteAsc': True,
         }
@@ -217,6 +267,176 @@ class experiment():
                 setattr(self, key, value)
         if getattr(self, 'eyeLinkCalTarget', 'standard') not in ('standard', 'fish'):
             self.eyeLinkCalTarget = 'standard'
+        self.eyeLinkCalibrationAreaProportion = self._normalizeAreaProportion(
+            getattr(self, 'eyeLinkCalibrationAreaProportion', [0.88, 0.83]),
+            default=[0.88, 0.83],
+        )
+        self.eyeLinkValidationAreaProportion = self._normalizeAreaProportion(
+            getattr(self, 'eyeLinkValidationAreaProportion', [0.88, 0.83]),
+            default=[0.88, 0.83],
+        )
+        # Older builds stored full grid span in degrees; convert once to ± from center.
+        if not getattr(self, 'eyeLinkAreaDegreesAreHalfExtent', False):
+            if self._isValidDegreePair(getattr(self, 'eyeLinkCalibrationAreaDegrees', None)):
+                self.eyeLinkCalibrationAreaDegrees = [
+                    float(self.eyeLinkCalibrationAreaDegrees[0]) / 2.0,
+                    float(self.eyeLinkCalibrationAreaDegrees[1]) / 2.0,
+                ]
+            if self._isValidDegreePair(getattr(self, 'eyeLinkValidationAreaDegrees', None)):
+                self.eyeLinkValidationAreaDegrees = [
+                    float(self.eyeLinkValidationAreaDegrees[0]) / 2.0,
+                    float(self.eyeLinkValidationAreaDegrees[1]) / 2.0,
+                ]
+            self.eyeLinkAreaDegreesAreHalfExtent = True
+        # Prefer degree-based settings; migrate legacy proportion-only configs.
+        hasCalDeg = self._isValidDegreePair(getattr(self, 'eyeLinkCalibrationAreaDegrees', None))
+        hasValDeg = self._isValidDegreePair(getattr(self, 'eyeLinkValidationAreaDegrees', None))
+        if hasCalDeg or hasValDeg:
+            self.syncEyeLinkAreaFromDegrees()
+        else:
+            self.syncEyeLinkAreaFromProportions()
+
+    @staticmethod
+    def _isValidDegreePair(value):
+        try:
+            return (
+                value is not None
+                and len(value) >= 2
+                and float(value[0]) > 0
+                and float(value[1]) > 0
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _normalizeAreaProportion(value, default=(0.88, 0.83)):
+        '''Clamp EyeLink area proportions to the allowed 0.2–1.0 range.'''
+        try:
+            props = [float(value[0]), float(value[1])]
+        except Exception:
+            props = [float(default[0]), float(default[1])]
+        return [
+            min(1.0, max(0.2, props[0])),
+            min(1.0, max(0.2, props[1])),
+        ]
+
+    def _normalizeAreaDegrees(self, value, monitor_name=None, default_proportion=(0.88, 0.83)):
+        '''
+        Clamp cal/val ± extents in degrees (from screen center) using the stimulus monitor FOV.
+        Max allowed is half the FOV (full-screen grid). Min matches EyeLink's 0.2 proportion floor.
+        '''
+        hFov, vFov = self.getMonitorFovDegrees(monitor_name)
+        try:
+            degs = [float(value[0]), float(value[1])]
+        except Exception:
+            if hFov is not None and vFov is not None:
+                # Default SR proportions → ± half-extent from center
+                degs = [
+                    0.5 * hFov * float(default_proportion[0]),
+                    0.5 * vFov * float(default_proportion[1]),
+                ]
+            else:
+                return None
+        if hFov is not None and vFov is not None and hFov > 0 and vFov > 0:
+            degs[0] = min(0.5 * hFov, max(0.1 * hFov, abs(degs[0])))
+            degs[1] = min(0.5 * vFov, max(0.1 * vFov, abs(degs[1])))
+        else:
+            degs[0] = max(0.5, abs(degs[0]))
+            degs[1] = max(0.5, abs(degs[1]))
+        return degs
+
+    def getMonitorFovDegrees(self, monitor_name=None):
+        '''
+        Horizontal and vertical screen FOV in degrees for a PsychoPy monitor profile.
+        '''
+        name = self.stimMonitor if monitor_name is None else monitor_name
+        mon = monitors.Monitor(name)
+        eyeDistance = mon.getDistance()
+        cmWide = mon.getWidth()
+        sizePix = mon.getSizePix() or mon.currentCalib.get('sizePix')
+        if not eyeDistance or not cmWide or eyeDistance <= 0 or cmWide <= 0:
+            return None, None
+        if sizePix and sizePix[0]:
+            cmHigh = cmWide * (float(sizePix[1]) / float(sizePix[0]))
+        else:
+            cmHigh = cmWide * 9.0 / 16.0
+        hFov = 2 * math.degrees(math.atan((cmWide / 2.0) / eyeDistance))
+        vFov = 2 * math.degrees(math.atan((cmHigh / 2.0) / eyeDistance))
+        return hFov, vFov
+
+    def getEyeLinkAreaProportionFromDegrees(self, degrees, monitor_name=None):
+        '''
+        Convert (±H°, ±V°) from center to EyeLink area proportions for the monitor FOV.
+        Total grid span = 2 × entered degrees, so proportion = (2 * deg) / FOV.
+        '''
+        hFov, vFov = self.getMonitorFovDegrees(monitor_name)
+        degs = self._normalizeAreaDegrees(degrees, monitor_name=monitor_name)
+        if hFov is None or vFov is None or degs is None or hFov <= 0 or vFov <= 0:
+            return None
+        return self._normalizeAreaProportion([(2.0 * degs[0]) / hFov, (2.0 * degs[1]) / vFov])
+
+    def getEyeLinkAreaSpanDegrees(self, proportion, monitor_name=None):
+        '''Return full (H°, V°) span covered by an EyeLink area proportion on the stimulus monitor.'''
+        hFov, vFov = self.getMonitorFovDegrees(monitor_name)
+        if hFov is None or vFov is None:
+            return None, None
+        props = self._normalizeAreaProportion(proportion)
+        return hFov * props[0], vFov * props[1]
+
+    def getEyeLinkAreaHalfExtentDegrees(self, proportion, monitor_name=None):
+        '''Return (±H°, ±V°) from center for an EyeLink area proportion.'''
+        span = self.getEyeLinkAreaSpanDegrees(proportion, monitor_name)
+        if None in span:
+            return None, None
+        return span[0] / 2.0, span[1] / 2.0
+
+    def syncEyeLinkAreaFromDegrees(self, monitor_name=None):
+        '''Update EyeLink proportions from ± degree extents; fill missing degrees from current proportions.'''
+        self.eyeLinkAreaDegreesAreHalfExtent = True
+        if not self._isValidDegreePair(self.eyeLinkCalibrationAreaDegrees):
+            half = self.getEyeLinkAreaHalfExtentDegrees(self.eyeLinkCalibrationAreaProportion, monitor_name)
+            if None not in half:
+                self.eyeLinkCalibrationAreaDegrees = [half[0], half[1]]
+        if not self._isValidDegreePair(self.eyeLinkValidationAreaDegrees):
+            half = self.getEyeLinkAreaHalfExtentDegrees(self.eyeLinkValidationAreaProportion, monitor_name)
+            if None not in half:
+                self.eyeLinkValidationAreaDegrees = [half[0], half[1]]
+
+        self.eyeLinkCalibrationAreaDegrees = self._normalizeAreaDegrees(
+            self.eyeLinkCalibrationAreaDegrees, monitor_name=monitor_name,
+        )
+        self.eyeLinkValidationAreaDegrees = self._normalizeAreaDegrees(
+            self.eyeLinkValidationAreaDegrees, monitor_name=monitor_name,
+        )
+
+        calProp = self.getEyeLinkAreaProportionFromDegrees(
+            self.eyeLinkCalibrationAreaDegrees, monitor_name=monitor_name,
+        )
+        valProp = self.getEyeLinkAreaProportionFromDegrees(
+            self.eyeLinkValidationAreaDegrees, monitor_name=monitor_name,
+        )
+        if calProp is not None:
+            self.eyeLinkCalibrationAreaProportion = calProp
+        if valProp is not None:
+            self.eyeLinkValidationAreaProportion = valProp
+        return self.eyeLinkCalibrationAreaProportion, self.eyeLinkValidationAreaProportion
+
+    def syncEyeLinkAreaFromProportions(self, monitor_name=None):
+        '''Update ± degree extents from EyeLink proportions (legacy configs / FOV changes).'''
+        self.eyeLinkCalibrationAreaProportion = self._normalizeAreaProportion(
+            self.eyeLinkCalibrationAreaProportion,
+        )
+        self.eyeLinkValidationAreaProportion = self._normalizeAreaProportion(
+            self.eyeLinkValidationAreaProportion,
+        )
+        calHalf = self.getEyeLinkAreaHalfExtentDegrees(self.eyeLinkCalibrationAreaProportion, monitor_name)
+        valHalf = self.getEyeLinkAreaHalfExtentDegrees(self.eyeLinkValidationAreaProportion, monitor_name)
+        if None not in calHalf:
+            self.eyeLinkCalibrationAreaDegrees = [calHalf[0], calHalf[1]]
+        if None not in valHalf:
+            self.eyeLinkValidationAreaDegrees = [valHalf[0], valHalf[1]]
+        self.eyeLinkAreaDegreesAreHalfExtent = True
+        return self.eyeLinkCalibrationAreaDegrees, self.eyeLinkValidationAreaDegrees
 
     def getPixPerDeg(self):
         '''Pixels per visual degree for the stimulus monitor.'''
@@ -861,10 +1081,42 @@ class experiment():
                 'DISPLAY_COORDS 0 0 {w} {h}'.format(w=scn_w - 1, h=scn_h - 1)
             )
 
+            self.syncEyeLinkAreaFromDegrees()
+            calProp = self._normalizeAreaProportion(self.eyeLinkCalibrationAreaProportion)
+            valProp = self._normalizeAreaProportion(self.eyeLinkValidationAreaProportion)
+            self.eyeLinkCalibrationAreaProportion = calProp
+            self.eyeLinkValidationAreaProportion = valProp
+            self._elTracker.sendCommand(
+                'calibration_area_proportion = {h:.4f} {v:.4f}'.format(h=calProp[0], v=calProp[1])
+            )
+            self._elTracker.sendCommand(
+                'validation_area_proportion = {h:.4f} {v:.4f}'.format(h=valProp[0], v=valProp[1])
+            )
+            calSpan = self.eyeLinkCalibrationAreaDegrees
+            valSpan = self.eyeLinkValidationAreaDegrees
+            monFov = self.getMonitorFovDegrees()
+            if self._isValidDegreePair(calSpan) and self._isValidDegreePair(valSpan) and None not in monFov:
+                print(
+                    '--> EyeLink cal area ±{cH:.1f}° H × ±{cV:.1f}° V '
+                    '(total {cTH:.1f}°×{cTV:.1f}°, prop {ch:.2f}x{cv:.2f}); '
+                    'val area ±{vH:.1f}° H × ±{vV:.1f}° V '
+                    '(total {vTH:.1f}°×{vTV:.1f}°, prop {vh:.2f}x{vv:.2f}); '
+                    'monitor FOV ~{mH:.1f}° H × {mV:.1f}° V'.format(
+                        cH=calSpan[0], cV=calSpan[1],
+                        cTH=2.0 * calSpan[0], cTV=2.0 * calSpan[1],
+                        ch=calProp[0], cv=calProp[1],
+                        vH=valSpan[0], vV=valSpan[1],
+                        vTH=2.0 * valSpan[0], vTV=2.0 * valSpan[1],
+                        vh=valProp[0], vv=valProp[1],
+                        mH=monFov[0], mV=monFov[1],
+                    )
+                )
+
             if not self.eyeLinkDummy:
                 try:
                     # Targets are drawn in this PsychoPy window (stimulus PC), not on the Host monitor.
-                    self.win.color = [-1, -1, -1]
+                    # Match ContrastDots / mid-gray stimuli (PsychoPy RGB -1..1; 0 = mid gray).
+                    self.win.color = [0.0, 0.0, 0.0]
                     self.win.flip()
                     genv = _BassoonEyeLinkGraphics(
                         self._elTracker,
@@ -876,7 +1128,7 @@ class experiment():
                         pix_per_deg=self.getPixPerDeg(),
                     )
                     pylink.openGraphicsEx(genv)
-                    cal_label = 'fish (~1° wide)' if self.eyeLinkCalTarget == 'fish' else 'dots'
+                    cal_label = 'fish (~1° wide)' if self.eyeLinkCalTarget == 'fish' else '0.5° red dots with black centers'
                     print('--> EyeLink setup ready.')
                     print('    Calibration targets ({t}) appear on the STIMULUS monitor (PsychoPy window), not the Host PC.'.format(
                         t=cal_label))
@@ -996,10 +1248,12 @@ class experiment():
                     checkTiming = not self.useEyeLink,
                     )
 
-        # When EyeLink is enabled, skip frame-rate measurement until protocols run.
+        # When EyeLink is enabled, skip frame-rate measurement until after setup.
         # PsychoPy otherwise shows "Attempting to measure frame rate..." during Window().
         if not self.useEyeLink:
-            self.FR = self.win.getActualFrameRate() #log the frame rate of the stimulus window
+            self.FR = self.win.getActualFrameRate(infoMsg='') #log the frame rate of the stimulus window
+            if self.FR:
+                self.win._bassoonMeasuredFR = self.FR
         else:
             self.FR = 0
 
@@ -1028,6 +1282,14 @@ class experiment():
         self.activated = True
         self.loggedStimuli = [] #always resets on a new run
         self.startEyeLink(gui_root=gui_root)
+        # Measure once after setup (quiet), then cache on the window so the first
+        # protocol does not block for several blank seconds before its first frame.
+        if not getattr(self.win, '_bassoonMeasuredFR', None):
+            print('--> Measuring stimulus frame rate...')
+            self.FR = self.win.getActualFrameRate(infoMsg='') or 0
+            if self.FR:
+                self.win._bassoonMeasuredFR = self.FR
+                print('--> Stimulus frame rate: {fr:.1f} Hz'.format(fr=self.FR))
         try:
             self._runProtocolLoop()
         finally:
@@ -1152,6 +1414,10 @@ class experiment():
                 p._okrSessionEvents = self._okrSessionEvents
                 p._okrSessionEventCounter = self._okrSessionEventCounter
                 p._okrSessionProtocolIndex = i + 1
+                p._eyeLinkValidationAreaProportion = self.eyeLinkValidationAreaProportion
+                p._eyeLinkCalibrationAreaProportion = self.eyeLinkCalibrationAreaProportion
+                p._eyeLinkValidationAreaDegrees = self.eyeLinkValidationAreaDegrees
+                p._eyeLinkCalibrationAreaDegrees = self.eyeLinkCalibrationAreaDegrees
                 if self._elTracker is not None:
                     safeName = displayName.replace(' ', '_')
                     self.sendEyeLinkMessage('TRIALID {n}_{name}'.format(n=i + 1, name=safeName))
@@ -1183,6 +1449,10 @@ class experiment():
                 protocolProperties.pop('_okrSessionEventCounter', None)
                 protocolProperties.pop('_okrSessionProtocolIndex', None)
                 protocolProperties.pop('_okrProtocolSessionZero', None)
+                protocolProperties.pop('_eyeLinkValidationAreaProportion', None)
+                protocolProperties.pop('_eyeLinkCalibrationAreaProportion', None)
+                protocolProperties.pop('_eyeLinkValidationAreaDegrees', None)
+                protocolProperties.pop('_eyeLinkCalibrationAreaDegrees', None)
                 self.loggedStimuli.append(protocolProperties)
         finally:
             sessionLogPath = self._writeOkrSessionLogFile()
