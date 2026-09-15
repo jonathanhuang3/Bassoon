@@ -10,9 +10,9 @@ from psychopy import monitors
 # sizePix is filled in automatically from the configured screen resolution.
 BASSOON_MONITORS = [
     {
-        'name': 'Dell E2720HS',
-        'widthCm': 59.6,
-        'heightCm': 33.8,
+        'name': 'AOC Q27GAZD Monitor',
+        'widthCm': 59.042,
+        'heightCm': 33.372,
         'distanceCm': 70.0,
     },
 ]
