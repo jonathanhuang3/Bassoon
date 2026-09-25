@@ -145,6 +145,7 @@ class experiment():
         self.loggedStimuli = []
 
         self.userInitiated = False #If True, the user will have to manually start each stimulus. Can also set this property manually for each stimulus
+        self.waitingRoom = True #If True, show "Waiting Room" and wait for Enter before each protocol
         self.angleOffset = 0.0 #deg - offset for directional stimuli
 
         self.writeTTL = 'None' #can be 'None', 'Pulse', 'Sustained'
@@ -202,6 +203,7 @@ class experiment():
                     self.informationScreen = configOptions['infoWindow']['informationScreen']
                     #experiment
                     self.userInitiated = configOptions['experiment']['userInitiated']
+                    self.waitingRoom = configOptions['experiment'].get('waitingRoom', True)
                     self.angleOffset = float(configOptions['experiment']['angleOffset'])
                     self.writeTTL = configOptions['experiment']['writeTTL']
                     if isinstance(self.writeTTL, bool):
@@ -1360,6 +1362,59 @@ class experiment():
         logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
         return logPath
 
+    def _showWaitingRoom(self, protocolNumber, totalProtocols, displayName):
+        '''
+        Admin gate between back-to-back protocols: show "Waiting Room" until Enter.
+        Returns False if the administrator pressed q to abort the remaining run.
+        '''
+        win = self.win
+        midGray = [0.0, 0.0, 0.0]
+        black = [-1.0, -1.0, -1.0]
+        win.color = midGray
+        win.flip()
+        win.flip()
+
+        label = visual.TextStim(
+            win=win,
+            text='Waiting Room',
+            color=black,
+            units='pix',
+            height=48,
+        )
+        infoLabel = None
+        if self.useInformationMonitor and getattr(self, 'informationWin', None) is not None:
+            self.informationWin.color = midGray
+            infoLabel = visual.TextStim(
+                win=self.informationWin,
+                text='Waiting Room',
+                color=black,
+                units='pix',
+                height=48,
+            )
+
+        print(
+            '!!! Waiting Room — press Enter to begin protocol {n} of {total} ({name}); '
+            'press q to abort remaining protocols'.format(
+                n=protocolNumber, total=totalProtocols, name=displayName,
+            )
+        )
+        event.clearEvents()
+        while True:
+            label.draw()
+            win.flip()
+            if infoLabel is not None:
+                infoLabel.draw()
+                self.informationWin.flip()
+            keys = event.getKeys(keyList=['return', 'enter', 'q'])
+            if not keys:
+                continue
+            if 'q' in keys:
+                print('*** Waiting Room quit — aborting remaining protocols')
+                return False
+            # Enter / return
+            return True
+
+
     def _runProtocolLoop(self):
         '''
         Play each protocol in order. Split out of activate() so EyeLink is always stopped in a finally block.
@@ -1374,6 +1429,10 @@ class experiment():
                     displayName = name
                 else:
                     displayName = name + suffix
+
+                if getattr(self, 'waitingRoom', True):
+                    if not self._showWaitingRoom(i + 1, len(self.protocolList), displayName):
+                        break
 
                 print('!!! Running Protocol Number ' + str(i+1) + ' of ' +  str(len(self.protocolList)) + ', with name ' + displayName)
                 p = p[1] #the protocol object is the second one in the tuple

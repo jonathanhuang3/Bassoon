@@ -61,11 +61,14 @@ from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
 from protocols.ContrastDots import ContrastDots
 from protocols.ContrastDotsWithTunnelMask import ContrastDotsWithTunnelMask
+from protocols.ContrastDotsWithTunnelMaskThreshold import ContrastDotsWithTunnelMaskThreshold
 from protocols.ContrastDotsWithHemifieldMask import ContrastDotsWithHemifieldMask
 from protocols.CalibrationMonitor import CalibrationMonitor
 from protocols.VisualAcuityDots import VisualAcuityDots
 from protocols.CustomValidation import CustomValidation
 from protocols.ContrastDotsWithDirectionOffset import ContrastDotsWithDirectionOffset
+from protocols.ContrastDotsPractice import ContrastDotsPractice
+from protocols.ContrastDotsThreshold import ContrastDotsThreshold
 from protocols.MonitorAlignmentCross import MonitorAlignmentCross
 
 class Bassoon:
@@ -1395,8 +1398,46 @@ class Bassoon:
         editWindow = Toplevel(root)
         editWindow.title('Edit ' + selectedName +
                          ' at Index ' + str(selectedIndex+1))
-        editFrame = Frame(editWindow)
-        editFrame.pack(fill="both", expand=True)
+        editWindow.geometry('780x640')
+        editWindow.minsize(520, 360)
+
+        # Scrollable property list (Contrast Dots etc. have many editable fields).
+        scrollContainer = Frame(editWindow)
+        scrollContainer.pack(side=TOP, fill=BOTH, expand=True)
+        canvas = Canvas(scrollContainer, highlightthickness=0)
+        scrollbar = Scrollbar(scrollContainer, orient=VERTICAL, command=canvas.yview)
+        editFrame = Frame(canvas)
+        editFrame.bind(
+            '<Configure>',
+            lambda event: canvas.configure(scrollregion=canvas.bbox('all')),
+        )
+        canvasWindow = canvas.create_window((0, 0), window=editFrame, anchor='nw')
+
+        def _fitScrollWidth(event):
+            canvas.itemconfigure(canvasWindow, width=event.width)
+
+        canvas.bind('<Configure>', _fitScrollWidth)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        scrollbar.pack(side=RIGHT, fill=Y)
+
+        def _onMouseWheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        def _bindMouseWheel(_event=None):
+            canvas.bind_all('<MouseWheel>', _onMouseWheel)
+
+        def _unbindMouseWheel(_event=None):
+            canvas.unbind_all('<MouseWheel>')
+
+        editWindow.bind('<Enter>', _bindMouseWheel)
+        editWindow.bind('<Leave>', _unbindMouseWheel)
+
+        def _closeEditWindow():
+            _unbindMouseWheel()
+            editWindow.destroy()
+
+        editWindow.protocol('WM_DELETE_WINDOW', _closeEditWindow)
 
         # grab the properties that the user can edit
         allProperties = vars(selectedProtocol)
@@ -1406,7 +1447,8 @@ class Bassoon:
         propVals = []
         propTypes = []
         entries = []
-        for i, prop in enumerate(propNames):
+        row = 0
+        for prop in propNames:
             if prop.startswith('_'):
                 # skip private properties that are set by the object itself
                 # AS A RULE, THE ONLY DATA TYPES THAT SHOULD BE EDITABLE ARE LISTS,
@@ -1432,41 +1474,46 @@ class Bassoon:
             propTypes.append(propType)
 
             label = Label(editFrame, text=prop)
-            label.grid(row=i, column=1)
+            label.grid(row=row, column=1, sticky='w', padx=(8, 4), pady=2)
 
             entry = Entry(editFrame)
             entry.insert(END, str(propVal))
-            entry.grid(row=i, column=2)
+            entry.grid(row=row, column=2, sticky='ew', padx=4, pady=2)
 
             entries.append(entry)
 
             typeLabel = Label(editFrame, text=str(propType))
-            typeLabel.grid(row=i, column=3)
+            typeLabel.grid(row=row, column=3, sticky='w', padx=4, pady=2)
             
             infoButton = Button(editFrame, text='\u24D8', font='Helvetica 10 bold', bg='#fcf9eb', command= lambda prop=prop: selectedProtocol.printDescription(prop))
-            infoButton.grid(row=i, column=4)
-            
+            infoButton.grid(row=row, column=4, sticky='e', padx=(4, 8), pady=2)
+            row += 1
+
+        editFrame.columnconfigure(2, weight=1)
 
         updateDict = {'propNamesEditable': propNamesEditable,
                       'propTypes': propTypes, 'entries': entries}
 
-        # show the estimated time for this particular protocol at the bottom of the window
+        # Fixed footer: estimated time + apply/close (always visible while scrolling).
+        footerFrame = Frame(editWindow)
+        footerFrame.pack(side=BOTTOM, fill=X, padx=8, pady=8)
+
         protocolRounded_minutes, protocolRemainingSeconds = secondsToMinutesAndSeconds(
             selectedProtocol.estimateTime())
-        self.protocolEstimatedTimeLabel = Label(editFrame, text='Estimated Time: ' + str(
+        self.protocolEstimatedTimeLabel = Label(footerFrame, text='Estimated Time: ' + str(
             protocolRounded_minutes) + 'm ' + str(protocolRemainingSeconds) + 's')
-        self.protocolEstimatedTimeLabel.grid(row=i + 1, column=2)
+        self.protocolEstimatedTimeLabel.pack(side=TOP, pady=(0, 6))
 
-        buttonGrid = Frame(editFrame)
-        buttonGrid.grid(row=i + 2, column=2)
+        buttonGrid = Frame(footerFrame)
+        buttonGrid.pack(side=TOP)
 
         #make the apply changes button a property so that it can be accessed by self.applyPropertyChanges() function in order to update the button color if validations aren't passed
         self.applyChangesButton = Button(buttonGrid, text='Apply Changes',
                                     command=lambda: self.applyPropertyChanges(selectedIndex, selectedProtocol, updateDict))
-        self.applyChangesButton.grid(row=1, column=1)
+        self.applyChangesButton.grid(row=1, column=1, padx=4)
         closeButton = Button(buttonGrid, text='Close Window',
-                             command=lambda: editWindow.destroy())
-        closeButton.grid(row=1, column=2)
+                             command=_closeEditWindow)
+        closeButton.grid(row=1, column=2, padx=4)
 
 
     def applyPropertyChanges(self, selectedIndex, selectedProtocol, updateDict):

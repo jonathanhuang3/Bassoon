@@ -51,9 +51,9 @@ class ContrastDotsWithTunnelMask(ContrastDots):
         if hasattr(self, 'tunnelEdgeSigmaDegrees'):
             delattr(self, 'tunnelEdgeSigmaDegrees')
         tf, errorMessage = super().internalValidation()
-        if self.tunnelVisibleDiameterDegrees <= 0:
+        if self.tunnelVisibleDiameterDegrees < 0:
             tf = False
-            errorMessage.append('Tunnel Visible Diameter must be greater than 0 degrees.')
+            errorMessage.append('Tunnel Visible Diameter must be 0 or greater degrees.')
         if getattr(self, 'transitionWidthDegrees', 0) < 0:
             tf = False
             errorMessage.append('Transition Width must be 0 or greater degrees.')
@@ -190,6 +190,9 @@ class ContrastDotsWithTunnelMask(ContrastDots):
         ))
         overlay_size_pix = max(overlay_half_size * 2, 2)
         tex_size = 1024
+        self._tunnelOverlaySizePix = overlay_size_pix
+        self._tunnelTexSize = tex_size
+        self._tunnelPpdXy = (ppd_h, ppd_v)
         opacity = self._buildTunnelOpacityMap(tex_size, overlay_size_pix, ppd_xy)
         self._gazeMask = visual.ImageStim(
             win,
@@ -218,6 +221,18 @@ class ContrastDotsWithTunnelMask(ContrastDots):
         if self._tracker is None:
             print(self._trackerInactiveMessage())
             self._gazeMaskWarningShown = True
+
+
+    def _refreshTunnelMask(self):
+        '''Rebuild the gaze-mask opacity from the current tunnelVisibleDiameterDegrees.'''
+        if getattr(self, '_gazeMask', None) is None:
+            return
+        opacity = self._buildTunnelOpacityMap(
+            int(self._tunnelTexSize),
+            float(self._tunnelOverlaySizePix),
+            self._tunnelPpdXy,
+        )
+        self._gazeMask.mask = opacity
 
     def _initGazeReadCache(self, win):
         '''
