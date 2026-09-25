@@ -178,17 +178,44 @@ class protocol():
         self._actualPreTime = self._preTimeNumFrames * 1/self._FR
         self._actualStimTime = self._stimTimeNumFrames * 1/self._FR
         self._actualTailTime = self._tailTimeNumFrames * 1/self._FR
-    def getPixPerDeg(self, stimMonitor):
+    def getPixPerDegXY(self, stimMonitor):
         '''
-        determine the pixels per degree for the stimulus monitor
+        Return (ppd_h, ppd_v): pixels per visual degree on each axis.
+
+        Horizontal FOV uses monitor width; vertical FOV uses height inferred from
+        width × (heightPix/widthPix), matching experiment.getMonitorFovDegrees.
         '''
         mon = monitors.Monitor(stimMonitor.name)
         eyeDistance = mon.getDistance()
-        numPixelsWide = mon.currentCalib['sizePix'][0]
+        sizePix = mon.currentCalib['sizePix']
         cmWide = mon.currentCalib['width']
-        totalVisualDegrees = 2*math.degrees(math.atan((cmWide/2)/eyeDistance))
-        print("totalVisualDegrees", totalVisualDegrees)
-        return numPixelsWide/totalVisualDegrees
+        cmHigh = cmWide * (float(sizePix[1]) / float(sizePix[0]))
+        hFov = 2 * math.degrees(math.atan((cmWide / 2.0) / eyeDistance))
+        vFov = 2 * math.degrees(math.atan((cmHigh / 2.0) / eyeDistance))
+        ppd_h = float(sizePix[0]) / hFov
+        ppd_v = float(sizePix[1]) / vFov
+        return ppd_h, ppd_v
+
+    def getPixPerDeg(self, stimMonitor):
+        '''
+        Isotropic pixels-per-degree (geometric mean of horizontal and vertical).
+
+        Prefer getPixPerDegXY when horizontal and vertical conversions should differ
+        (motion components, circular stimuli that must stay round in degrees).
+        '''
+        mon = monitors.Monitor(stimMonitor.name)
+        ppd_h, ppd_v = self.getPixPerDegXY(stimMonitor)
+        ppd = math.sqrt(ppd_h * ppd_v)
+        print(
+            'ppd_h={h:.3f} ppd_v={v:.3f} ppd_iso={iso:.3f} | '
+            'eyeDistance={d} cmWide={w} sizePix={px}'.format(
+                h=ppd_h, v=ppd_v, iso=ppd,
+                d=mon.getDistance(),
+                w=mon.currentCalib['width'],
+                px=mon.currentCalib['sizePix'],
+            )
+        )
+        return ppd
 
     def _startTrialClock(self):
         '''Start protocol timing and align EyeLink SYNCTIME with t=0 for OKR logs.'''

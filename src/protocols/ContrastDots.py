@@ -26,7 +26,7 @@ class ContrastDots(protocol):
         self.backgroundColor = [0.0, 0.0, 0.0] #gray background (in RGB, -1 to 1)
 
         # Dot parameters
-        self.numberOfDots = 100 #number of dots displayed at once
+        self.numberOfDots = 200 #number of dots displayed at once
         self.dotColor = [1.0, 1.0, 1.0] #white dots at full contrast (in RGB, -1 to 1)
         self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0] #list of contrast levels from -1 to 1. Total epochs = len(contrasts) * len(directions) * stimulusReps
         self.dotSizeDegrees = 1.0 #degrees - dot diameter
@@ -39,7 +39,7 @@ class ContrastDots(protocol):
 
         # Fixation cross shown during tail time
         self.fixationCrossColor = [1.0, -1.0, -1.0] #red (in RGB, -1 to 1)
-        self.fixationCrossSizeDegrees = 1.0 #degrees - height of the fixation cross
+        self.fixationCrossSizeDegrees = 1.0 #degrees - tip-to-tip span (same visual extent scale as dotSizeDegrees)
 
 
     def _usePersistentDots(self):
@@ -205,14 +205,18 @@ class ContrastDots(protocol):
 
 
     def _directionLabel(self, direction=None):
-        '''Map motion direction (degrees) to slowphase-okr direction names.'''
+        '''Map motion direction (degrees) to slowphase-okr direction names.
+
+        Angles match the motion convention used in run(): 0° = right (+x),
+        90° = up (+y), 180° = left (-x), 270° = down (-y).
+        '''
         angle = self.deg0to360(self.direction if direction is None else direction)
         if 45.0 <= angle < 135.0:
             return 'Up'
         if 135.0 <= angle < 225.0:
-            return 'Down'
-        if 225.0 <= angle < 315.0:
             return 'Left'
+        if 225.0 <= angle < 315.0:
+            return 'Down'
         return 'Right'
 
 
@@ -404,7 +408,10 @@ class ContrastDots(protocol):
 
 
     def _initPerRunStimulus(self, win, pixPerDeg):
-        '''Optional per-run setup hook for subclasses (e.g. gaze-contingent mask).'''
+        '''Optional per-run setup hook for subclasses (e.g. gaze-contingent mask).
+
+        pixPerDeg may be a scalar or (ppd_h, ppd_v) tuple.
+        '''
         pass
 
 
@@ -431,10 +438,16 @@ class ContrastDots(protocol):
         self._actualPostStimTime = self._postStimTimeNumFrames * (1 / self._FR)
 
         random.seed(self.randomSeed)
-        pixPerDeg = self.getPixPerDeg(win.monitor)
-        dotRadiusPix = (self.dotSizeDegrees / 2.0) * pixPerDeg
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        # ElementArrayStim size [w, h] so a N° diameter stays circular in degrees.
+        dotDiameterPix = [
+            float(self.dotSizeDegrees) * ppd_h,
+            float(self.dotSizeDegrees) * ppd_v,
+        ]
+        # Respawn margin: use the larger axis so dots stay fully on-screen.
+        dotRadiusPix = 0.5 * max(dotDiameterPix)
 
-        self._initPerRunStimulus(win, pixPerDeg)
+        self._initPerRunStimulus(win, (ppd_h, ppd_v))
 
         if self.userInitiated:
             self.showInformationText(
@@ -452,7 +465,6 @@ class ContrastDots(protocol):
         dotLifetimeFrames = round(self._FR * self.dotLifetime)
 
         self.dotCoords = np.zeros((self.numberOfDots, 2))
-        dotDiameterPix = 2 * dotRadiusPix
 
         dots = visual.ElementArrayStim(
             win,
@@ -465,12 +477,27 @@ class ContrastDots(protocol):
             colors=self.dotColor,
         )
 
-        fixationCross = visual.TextStim(
-            win,
-            text='+',
-            color=self.fixationCrossColor,
-            height=self.fixationCrossSizeDegrees * pixPerDeg,
-            units='pix',
+        # ShapeStim arms: horizontal span uses ppd_h, vertical uses ppd_v.
+        crossHalfX = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_h
+        crossHalfY = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_v
+        crossLineWidth = max(2.0, min(crossHalfX, crossHalfY) * 2.0 * 0.15)
+        fixationCrossArms = (
+            visual.ShapeStim(
+                win,
+                units='pix',
+                vertices=((-crossHalfX, 0.0), (crossHalfX, 0.0)),
+                lineWidth=crossLineWidth,
+                closeShape=False,
+                lineColor=self.fixationCrossColor,
+            ),
+            visual.ShapeStim(
+                win,
+                units='pix',
+                vertices=((0.0, -crossHalfY), (0.0, crossHalfY)),
+                lineWidth=crossLineWidth,
+                closeShape=False,
+                lineColor=self.fixationCrossColor,
+            ),
         )
 
         self.createEpochLog()
@@ -484,11 +511,11 @@ class ContrastDots(protocol):
                 contrast = epoch['contrast']
                 blockDirection = epoch['direction']
                 blockIndex = epochNum - 1
-                pixPerFrame = self.speed * pixPerDeg * (1 / self._FR)
                 directionRad = math.radians(blockDirection)
+                # Anisotropic deg→pix so speed is correct on both axes.
                 speedComponents = np.array([
-                    pixPerFrame * math.cos(directionRad),
-                    pixPerFrame * math.sin(directionRad),
+                    self.speed * ppd_h * (1 / self._FR) * math.cos(directionRad),
+                    self.speed * ppd_v * (1 / self._FR) * math.sin(directionRad),
                 ])
                 if self._informationWin[0]:
                     self.showInformationText(
@@ -579,7 +606,8 @@ class ContrastDots(protocol):
 
                 fixationStart = None
                 for f in range(self._tailTimeNumFrames):
-                    fixationCross.draw()
+                    for arm in fixationCrossArms:
+                        arm.draw()
                     win.flip()
                     if fixationStart is None:
                         fixationStart = trialClock.getTime()

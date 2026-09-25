@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Mask Dots is Contrast Dots with a gaze-contingent tunnel mask: a circular
-aperture follows EyeLink gaze while the periphery is occluded with a soft
-Gaussian falloff using the gray background color.
+Contrast Dots with Tunnel Mask is Contrast Dots with a gaze-contingent tunnel
+mask: a circular aperture follows EyeLink gaze while the periphery is occluded
+with a soft raised-cosine edge using the gray background color.
 """
 import math
 from datetime import datetime
@@ -14,40 +14,112 @@ from psychopy import core, visual
 from protocols.ContrastDots import ContrastDots
 
 
-class MaskDots(ContrastDots):
+class ContrastDotsWithTunnelMask(ContrastDots):
     _okrSyncsTrialClock = True
 
     def __init__(self):
         super().__init__()
-        self.protocolName = 'MaskDots'
+        self.protocolName = 'ContrastDotsWithTunnelMask'
         self.tunnelVisibleDiameterDegrees = 10.0  # clear aperture diameter in degrees
-        self.tunnelEdgeSigmaDegrees = 1.5  # Gaussian edge softness in degrees
+        self.transitionWidthDegrees = 1.0  # raised-cosine edge width in degrees (0 = hard edge)
         self.maskColor = [0.0, 0.0, 0.0]  # defaults to the gray background color
-        self.persistentDots = True  # True = dots never respawn (infinite lifetime)
-        self.contrasts = [1.0]  # single full-contrast block by default
+        self.persistentDots = False  # True = dots never respawn (infinite lifetime)
+        self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0]
         self.logGazeLatency = True  # True = log per-frame gaze-contingent latency to a text file
+        if hasattr(self, 'tunnelEdgeSigmaDegrees'):
+            delattr(self, 'tunnelEdgeSigmaDegrees')
 
     def _usePersistentDots(self):
         return bool(self.persistentDots)
 
     def _stimulusTitle(self):
-        return 'Mask Dots'
+        return 'Contrast Dots with Tunnel Mask'
 
     def _gazeMissingMessage(self):
-        return '*** Mask Dots: No valid gaze sample yet; holding tunnel at last position.'
+        return (
+            '*** Contrast Dots with Tunnel Mask: No valid gaze sample yet; '
+            'holding tunnel at last position.'
+        )
 
     def _trackerInactiveMessage(self):
-        return '*** Mask Dots: EyeLink is not active. The tunnel will stay at screen center.'
+        return (
+            '*** Contrast Dots with Tunnel Mask: EyeLink is not active. '
+            'The tunnel will stay at screen center.'
+        )
 
     def internalValidation(self):
+        if hasattr(self, 'tunnelEdgeSigmaDegrees'):
+            delattr(self, 'tunnelEdgeSigmaDegrees')
         tf, errorMessage = super().internalValidation()
         if self.tunnelVisibleDiameterDegrees <= 0:
             tf = False
             errorMessage.append('Tunnel Visible Diameter must be greater than 0 degrees.')
-        if self.tunnelEdgeSigmaDegrees <= 0:
+        if getattr(self, 'transitionWidthDegrees', 0) < 0:
             tf = False
-            errorMessage.append('Tunnel Edge Sigma must be greater than 0 degrees.')
+            errorMessage.append('Transition Width must be 0 or greater degrees.')
         return tf, errorMessage
+
+    @staticmethod
+    def _raisedCosineOpacity(t, width):
+        '''
+        Map signed distance to a PsychoPy ImageStim mask in [-1, 1].
+
+        PsychoPy numpy masks use -1 = fully transparent and +1 = fully opaque.
+        Using 0..1 incorrectly leaves the "clear" side at mid-alpha and veils dots.
+
+        t and width must share units (visual degrees for the scotoma maps).
+        t < 0 is the clear side; t > 0 is the occluded side. width <= 0 gives a
+        hard edge at t=0.
+        '''
+        if width <= 0:
+            # -1 clear, +1 occluded
+            return np.where(t >= 0, 1.0, -1.0).astype(np.float32)
+        half = width / 2.0
+        # Start fully clear (-1); ramp to fully occluded (+1) across the fringe.
+        mask = np.full(t.shape, -1.0, dtype=np.float32)
+        mask[t >= half] = 1.0
+        in_zone = (t > -half) & (t < half)
+        u = (t[in_zone] + half) / width  # 0..1 across the transition
+        # raised-cosine in 0..1, then map to -1..+1
+        alpha = 0.5 * (1.0 - np.cos(np.pi * u))
+        mask[in_zone] = (2.0 * alpha - 1.0).astype(np.float32)
+        return mask
+
+    def _eyeGazeValid(self, eye):
+        '''
+        True if this eye sample is usable for mask placement.
+
+        During blinks EyeLink often emits garbage gaze (or pupil=0) for a few
+        samples before MISSING_DATA. Updating the mask from those samples yanks
+        it off-screen and briefly reveals the full dot field.
+        '''
+        try:
+            gaze = eye.getGaze()
+            pupil = eye.getPupilSize()
+        except Exception:
+            return False
+        missing = self._missingData
+        if gaze[0] == missing or gaze[1] == missing:
+            return False
+        if pupil == missing or pupil is None:
+            return False
+        try:
+            px = float(pupil)
+            gx = float(gaze[0])
+            gy = float(gaze[1])
+        except (TypeError, ValueError):
+            return False
+        if not (math.isfinite(px) and math.isfinite(gx) and math.isfinite(gy)):
+            return False
+        if px <= 0.0:
+            return False
+        # Reject gaze far outside the stimulus display (common blink artifact).
+        margin = 200.0
+        width = 2.0 * self._halfWidthPix
+        height = 2.0 * self._halfHeightPix
+        if gx < -margin or gx > width + margin or gy < -margin or gy > height + margin:
+            return False
+        return True
 
     def _readGazePix(self, win):
         '''Return the latest gaze position in PsychoPy pixel coordinates, or None.'''
@@ -58,44 +130,67 @@ class MaskDots(ContrastDots):
             sample = tracker.getNewestSample()
             if sample is None:
                 return None
+
+            gazes = []
             if sample.isLeftSample():
-                gaze = sample.getLeftEye().getGaze()
-            elif sample.isRightSample():
-                gaze = sample.getRightEye().getGaze()
+                left = sample.getLeftEye()
+                if self._eyeGazeValid(left):
+                    gazes.append(left.getGaze())
+            if sample.isRightSample():
+                right = sample.getRightEye()
+                if self._eyeGazeValid(right):
+                    gazes.append(right.getGaze())
+            if not gazes:
+                return None
+
+            if len(gazes) == 2:
+                gx = 0.5 * (float(gazes[0][0]) + float(gazes[1][0]))
+                gy = 0.5 * (float(gazes[0][1]) + float(gazes[1][1]))
             else:
-                return None
-            if gaze[0] == self._missingData or gaze[1] == self._missingData:
-                return None
+                gx = float(gazes[0][0])
+                gy = float(gazes[0][1])
+
             if self._pendingLatency is not None:
                 self._pendingLatency[1] = sample.getTime()
-            x = float(gaze[0]) - self._halfWidthPix
-            y = self._halfHeightPix - float(gaze[1])
+            x = gx - self._halfWidthPix
+            y = self._halfHeightPix - gy
             return (x, y)
         except Exception:
             return None
 
-    def _buildTunnelOpacityMap(self, tex_size, overlay_size_pix, pix_per_deg):
-        '''Radial Gaussian edge: transparent center, opaque periphery.'''
-        radius_pix = (self.tunnelVisibleDiameterDegrees / 2.0) * pix_per_deg
-        sigma_pix = self.tunnelEdgeSigmaDegrees * pix_per_deg
+    def _buildTunnelOpacityMap(self, tex_size, overlay_size_pix, ppd_xy):
+        '''Radial raised-cosine edge in visual degrees (isotropic aperture).'''
+        ppd_h, ppd_v = ppd_xy
+        radius_deg = self.tunnelVisibleDiameterDegrees / 2.0
+        width_deg = float(self.transitionWidthDegrees)
         center = (tex_size - 1) / 2.0
         yy, xx = np.mgrid[0:tex_size, 0:tex_size]
-        r_pix = np.sqrt((xx - center) ** 2 + (yy - center) ** 2)
-        r_pix = r_pix * (overlay_size_pix / tex_size)
-        scaled = (r_pix - radius_pix) / (sigma_pix * math.sqrt(2.0))
-        opacity = 0.5 * (1.0 + np.vectorize(math.erf)(scaled))
-        return np.clip(opacity, 0.0, 1.0).astype(np.float32)
+        scale = overlay_size_pix / float(tex_size)
+        x_deg = (xx - center) * scale / ppd_h
+        y_deg = (yy - center) * scale / ppd_v
+        r_deg = np.sqrt(x_deg ** 2 + y_deg ** 2)
+        # Positive outside the clear aperture -> opaque.
+        return self._raisedCosineOpacity(r_deg - radius_deg, width_deg)
 
-    def _initPerRunStimulus(self, win, pix_per_deg):
-        radius_pix = (self.tunnelVisibleDiameterDegrees / 2.0) * pix_per_deg
-        sigma_pix = self.tunnelEdgeSigmaDegrees * pix_per_deg
-        half_diagonal = math.hypot(win.size[0] / 2.0, win.size[1] / 2.0)
-        overlay_half_size = int(
-            math.ceil(half_diagonal + radius_pix + 4.0 * sigma_pix)
+    def _initPerRunStimulus(self, win, ppd_xy):
+        if hasattr(self, 'tunnelEdgeSigmaDegrees'):
+            delattr(self, 'tunnelEdgeSigmaDegrees')
+        ppd_h, ppd_v = ppd_xy
+        transition_pix = max(
+            0.0,
+            float(self.transitionWidthDegrees) * max(ppd_h, ppd_v),
         )
-        overlay_size_pix = overlay_half_size * 2
-        tex_size = 512
-        opacity = self._buildTunnelOpacityMap(tex_size, overlay_size_pix, pix_per_deg)
+        # Mask is centered on gaze. Worst case: gaze at one corner, cover the
+        # opposite corner → full screen diagonal. Extra margin matches the
+        # off-screen tolerance in _eyeGazeValid so extreme samples still occlude.
+        full_diagonal = math.hypot(float(win.size[0]), float(win.size[1]))
+        gaze_margin_pix = 200.0
+        overlay_half_size = int(math.ceil(
+            full_diagonal + gaze_margin_pix + transition_pix + 1.0
+        ))
+        overlay_size_pix = max(overlay_half_size * 2, 2)
+        tex_size = 1024
+        opacity = self._buildTunnelOpacityMap(tex_size, overlay_size_pix, ppd_xy)
         self._gazeMask = visual.ImageStim(
             win,
             image=np.ones((tex_size, tex_size), dtype=np.float32),
@@ -109,6 +204,17 @@ class MaskDots(ContrastDots):
         self._lastGaze = (0.0, 0.0)
         self._gazeMaskWarningShown = False
         self._initGazeReadCache(win)
+        print(
+            '--> Contrast Dots with Tunnel Mask: tunnel diameter = {d:g}°, '
+            'raised-cosine transition = {w:g}° '
+            '(mask overlay {s} px, ppd_h={h:.2f} ppd_v={v:.2f}).'.format(
+                d=float(self.tunnelVisibleDiameterDegrees),
+                w=float(self.transitionWidthDegrees),
+                s=overlay_size_pix,
+                h=ppd_h,
+                v=ppd_v,
+            )
+        )
         if self._tracker is None:
             print(self._trackerInactiveMessage())
             self._gazeMaskWarningShown = True
@@ -164,6 +270,7 @@ class MaskDots(ContrastDots):
         elif not self._gazeMaskWarningShown and self._tracker is not None:
             print(self._gazeMissingMessage())
             self._gazeMaskWarningShown = True
+        # Always draw the mask at the last good gaze (hold through blinks / missing data).
         self._gazeMask.pos = self._lastGaze
         self._gazeMask.draw()
 

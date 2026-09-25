@@ -43,10 +43,10 @@ class CustomValidation(protocol):
         self.targetSizeDegrees = 0.5 #degrees - outer target diameter (matches Bassoon standard cal target)
         self.targetInnerSizeDegrees = 0.15 #degrees - inner disk diameter
         self.randomizeOrder = True #if True, shuffle point order within each grid pass (like Host C/V); set False to use fixed HV9 index order
-        self.useExperimentAreaDegrees = True #if True, use EyeLink cal/val ± degree extents from Options; if False, use areaDegreesH/V below
+        self.useExperimentAreaDegrees = False #if True, use EyeLink cal/val ± degree extents from Options; if False, use areaDegreesH/V below
         self.areaDegreesSource = 'validation' # 'validation' or 'calibration' — which Options degree pair to use when useExperimentAreaDegrees is True
-        self.areaDegreesH = 20.0 #± horizontal extent from center in visual degrees (used when useExperimentAreaDegrees is False)
-        self.areaDegreesV = 11.0 #± vertical extent from center in visual degrees (used when useExperimentAreaDegrees is False)
+        self.areaDegreesH = 10.0 #± horizontal extent from center in visual degrees
+        self.areaDegreesV = 10.0 #± vertical extent from center in visual degrees
         self.cornerScaling = 1.0 #scales corner targets toward center (1.0 = corners of the mid-edge rectangle; Host may use ~0.88)
 
 
@@ -301,9 +301,11 @@ class CustomValidation(protocol):
         self._interStimulusIntervalNumFrames = round(self._FR * self.interStimulusInterval)
         self._actualInterStimulusInterval = self._interStimulusIntervalNumFrames * (1.0 / self._FR)
 
-        pixPerDeg = self.getPixPerDeg(win.monitor)
-        outerSize = float(self.targetSizeDegrees) * pixPerDeg
-        innerSize = float(self.targetInnerSizeDegrees) * pixPerDeg
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        outerW = float(self.targetSizeDegrees) * ppd_h
+        outerH = float(self.targetSizeDegrees) * ppd_v
+        innerW = float(self.targetInnerSizeDegrees) * ppd_h
+        innerH = float(self.targetInnerSizeDegrees) * ppd_v
 
         deg_h, deg_v = self._resolvedAreaDegrees()
         prop_h, prop_v = self._resolvedAreaProportion(win.monitor)
@@ -315,16 +317,19 @@ class CustomValidation(protocol):
 
         # Create targets before timing starts so the first POINT_START frame can
         # draw immediately (no stimulus-construction hitch on the first flip).
-        outer = visual.Circle(
+        # Ellipse width/height so the target is circular in visual degrees.
+        outer = visual.Polygon(
             win=win,
-            radius=outerSize / 2.0,
+            edges=64,
+            size=(outerW, outerH),
             fillColor=self.targetColor,
             lineColor=None,
             units='pix',
         )
-        inner = visual.Circle(
+        inner = visual.Polygon(
             win=win,
-            radius=max(innerSize / 2.0, 0.5),
+            edges=64,
+            size=(max(innerW, 1.0), max(innerH, 1.0)),
             fillColor=self.targetInnerColor,
             lineColor=None,
             units='pix',

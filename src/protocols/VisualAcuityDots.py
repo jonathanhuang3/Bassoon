@@ -34,18 +34,19 @@ class VisualAcuityDots(protocol):
         self.tailTime = 0.75 #seconds - the amount of time after the flash on each epoch, during which the background is shown
         self.interStimulusInterval = 6.0 #seconds - fixation cross shown in the center of the screen
         
-        self.speed = 5.0 # speed of dots in deg/sec
-        self.spacing = 0.5 # degrees - distance between dots
+        self.speed = 10.0 # speed of dots in deg/sec
+        self.spacing = 2.0 # degrees - distance between dots
         self.orientations = [90.0] # direction in degrees that dots will travel (e.g. 225 == southwest).
         self.lowerLogMAR = 0.0 # smallest logMAR value, diameter of dots corresponds to minimum angle of resolution (MAR)
         self.upperLogMAR = 1.0 # greatest logMAR value, diameter of dots corresponds to minimum angle of resolution (MAR)
         self.stepSize = 0.1 # how far values in logMAR range are from each other
         self.stepTime = 2.0 # time in seconds between each step
         self.ratio = 2/1 # disk surround:center diameter ratio (i.e. how many times larger should the surround diameter be compared to the center)
-        self.centerContrast = 0.4
-        self.surroundContrast = -0.19
+        self.centerContrast = 1.4 # Weber contrast, if exceeds 1.0, background color will deviate from middle gray to accomodate the higher contrast
+        self.surroundContrast = -0.19 # Weber contrast, if below -1.0, background color will deviate from middle gray to accomodate the lower contrast
 
-        self.fixationCrossSize = 0.5 # size of fixation cross in degrees
+        self.fixationCrossSize = 2.0 # size of fixation cross in degrees
+        self.fixationCrossColor = [-1.0,-1.0,-1.0]
 
         self._glasses = None # `Glasses3` object
         
@@ -96,14 +97,18 @@ class VisualAcuityDots(protocol):
         return angle
 
     def _directionLabel(self, direction=None):
-        '''Map motion direction (degrees) to slowphase-okr direction names.'''
+        '''Map motion direction (degrees) to slowphase-okr direction names.
+
+        Angles match the motion convention: 0° = right, 90° = up,
+        180° = left, 270° = down.
+        '''
         angle = self.deg0to360(self.orientations[0] if direction is None else direction)
         if 45.0 <= angle < 135.0:
             return 'Up'
         if 135.0 <= angle < 225.0:
-            return 'Down'
-        if 225.0 <= angle < 315.0:
             return 'Left'
+        if 225.0 <= angle < 315.0:
+            return 'Down'
         return 'Right'
 
     def _nextOkrEventIndex(self, counter):
@@ -217,9 +222,25 @@ class VisualAcuityDots(protocol):
         #     pix = rawPix
         pix = rawPix
         # pix = round(rawPix)
-        print("pix", pix, "pixPerDeg", pixPerDeg, "logMAR", logMAR)
+        print("pix", pix, "logMAR", logMAR)
         return pix
     
+    def weberToRGB(self, contrasts: list[float]):
+        '''Convert Weber contrast to RGB values'''
+        highest, lowest = max(contrasts), min(contrasts)
+        # currently specific to center exceeding max and surround not exceeding min
+        maxContrast = 1.0 if highest > 1.0 else highest
+        minContrast = -1.0 if lowest < -1.0 else lowest
+        backgroundLuminance = maxContrast / (highest + 1)
+        backgroundColor = 2 * backgroundLuminance - 1
+        surroundLuminance = backgroundLuminance * (minContrast + 1)
+        surroundColor = 2 * surroundLuminance - 1
+        backgroundColor = [backgroundColor, backgroundColor, backgroundColor]
+        surroundColor = [surroundColor, surroundColor, surroundColor]
+        centerColor = [maxContrast, maxContrast, maxContrast]
+
+        return backgroundColor, surroundColor, centerColor
+        
     #Coroutines
     async def connectGlasses(self):
         '''Connect to Tobii Glasses 3 if available'''
@@ -289,6 +310,8 @@ class VisualAcuityDots(protocol):
         positions = np.column_stack((xPos.ravel(), yPos.ravel())) - win.size / 2
         diameters = np.full(numDots, self.logMAR2Pix(self.lowerLogMAR, pixPerDeg))
 
+        backgroundColor, surroundColor, centerColor = self.weberToRGB([self.centerContrast, self.surroundContrast])
+
         dots = visual.ElementArrayStim(
             win,
             units = 'pix',
@@ -297,7 +320,7 @@ class VisualAcuityDots(protocol):
             elementTex = None,
             xys = positions,
             sizes = diameters,
-            contrs = self.centerContrast
+            colors = centerColor
             )
 
         surroundDots = visual.ElementArrayStim(
@@ -308,7 +331,7 @@ class VisualAcuityDots(protocol):
             elementTex = None,
             xys = positions,
             sizes = diameters * self.ratio,
-            contrs = self.surroundContrast
+            colors = surroundColor
             )
 
         fixationCross = visual.TextStim(
@@ -316,6 +339,7 @@ class VisualAcuityDots(protocol):
             text="+",
             pos=(0,0),
             units='pix',
+            color=self.fixationCrossColor
         )
         fixationCross.size = self.fixationCrossSize * pixPerDeg
         logMARs = np.arange(self.lowerLogMAR, self.upperLogMAR + self.stepSize, self.stepSize)
@@ -356,7 +380,10 @@ class VisualAcuityDots(protocol):
                 
                 index = logMAR = 0
 
-                win.color = self.backgroundColor
+                win.color = backgroundColor
+                if backgroundColor != self.backgroundColor:
+                    print("Overriding background color to ", backgroundColor, "so that selected dot contrasts are valid")
+
                 for sweep in range(2):
                     sweepLabel = 'Ascending' if sweep == 0 else 'Descending'
                     #pretime... nothing happens

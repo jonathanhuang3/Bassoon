@@ -1,29 +1,31 @@
 # -*- coding: utf-8 -*-
 """
-OKR Direction Dots is Contrast Dots specialized for testing OKR across
-cardinal directions and small diagonal / torsional offsets.
+Contrast Dots with Direction Offset is Contrast Dots specialized for testing
+OKR across cardinal directions and small diagonal / torsional offsets.
 
-Example: directions = [90, 270], directionOffsets = [0, 2] yields epochs at
-90°, 92°, 88°, 270°, 272°, and 268° (0° offset once; each nonzero offset as ±).
+Example: directions = [90], directionOffsets = [0, 2, 5] yields epochs at
+90°, 92°, 88°, 95°, and 85° (0° offset once; each nonzero offset as ±).
 """
 from protocols.ContrastDots import ContrastDots
 
 
-class OkrDirectionDots(ContrastDots):
+class ContrastDotsWithDirectionOffset(ContrastDots):
     _okrSyncsTrialClock = True
 
     def __init__(self):
         super().__init__()
-        self.protocolName = 'OkrDirectionDots'
+        self.protocolName = 'ContrastDotsWithDirectionOffset'
         # Default to full positive contrast; additional contrast levels can still be listed.
         self.contrasts = [1.0]
+        # Up only by default (90°); add 270 etc. to test other bases.
+        self.directions = [90.0]
         # Magnitude list in degrees. 0 keeps the exact base direction; each nonzero
         # value expands to both +offset and -offset from every base direction.
-        self.directionOffsets = [0.0, 2.0]
+        self.directionOffsets = [0.0, 2.0, 5.0, 10.0, 20.0, 30.0, 45.0]
 
 
     def _stimulusTitle(self):
-        return 'OKR Direction Dots'
+        return 'Contrast Dots with Direction Offset'
 
 
     def internalValidation(self):

@@ -438,14 +438,21 @@ class experiment():
         self.eyeLinkAreaDegreesAreHalfExtent = True
         return self.eyeLinkCalibrationAreaDegrees, self.eyeLinkValidationAreaDegrees
 
-    def getPixPerDeg(self):
-        '''Pixels per visual degree for the stimulus monitor.'''
+    def getPixPerDegXY(self):
+        '''Return (ppd_h, ppd_v) for the stimulus monitor.'''
         mon = monitors.Monitor(self.stimMonitor)
         eyeDistance = mon.getDistance()
-        numPixelsWide = mon.currentCalib['sizePix'][0]
+        sizePix = mon.currentCalib['sizePix']
         cmWide = mon.currentCalib['width']
-        totalVisualDegrees = 2 * math.degrees(math.atan((cmWide / 2) / eyeDistance))
-        return numPixelsWide / totalVisualDegrees
+        cmHigh = cmWide * (float(sizePix[1]) / float(sizePix[0]))
+        hFov = 2 * math.degrees(math.atan((cmWide / 2.0) / eyeDistance))
+        vFov = 2 * math.degrees(math.atan((cmHigh / 2.0) / eyeDistance))
+        return float(sizePix[0]) / hFov, float(sizePix[1]) / vFov
+
+    def getPixPerDeg(self):
+        '''Isotropic pixels per degree (geometric mean of H and V).'''
+        ppd_h, ppd_v = self.getPixPerDegXY()
+        return math.sqrt(ppd_h * ppd_v)
 
     def addProtocol(self, newProtocol):
         '''

@@ -60,12 +60,13 @@ from protocols.SumOfSinesOscillation import SumOfSinesOscillation
 from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
 from protocols.ContrastDots import ContrastDots
-from protocols.MaskDots import MaskDots
-from protocols.HemifieldMaskDots import HemifieldMaskDots
+from protocols.ContrastDotsWithTunnelMask import ContrastDotsWithTunnelMask
+from protocols.ContrastDotsWithHemifieldMask import ContrastDotsWithHemifieldMask
 from protocols.CalibrationMonitor import CalibrationMonitor
 from protocols.VisualAcuityDots import VisualAcuityDots
 from protocols.CustomValidation import CustomValidation
-from protocols.OkrDirectionDots import OkrDirectionDots
+from protocols.ContrastDotsWithDirectionOffset import ContrastDotsWithDirectionOffset
+from protocols.MonitorAlignmentCross import MonitorAlignmentCross
 
 class Bassoon:
     def __init__(self, master):

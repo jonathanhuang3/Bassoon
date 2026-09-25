@@ -13,7 +13,7 @@ BASSOON_MONITORS = [
         'name': 'AOC Q27GAZD Monitor',
         'widthCm': 59.042,
         'heightCm': 33.372,
-        'distanceCm': 70.0,
+        'distanceCm': 60.0,
     },
 ]
 
