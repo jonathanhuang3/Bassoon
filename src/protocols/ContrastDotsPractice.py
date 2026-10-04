@@ -228,7 +228,7 @@ class ContrastDotsPractice(ContrastDots):
         '''
         self.getFR(win)
         fr = float(getattr(self, '_FR', 60) or 60)
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor, win=win)
         # Same cup size as staircase base so level 2 can stack on the same visual language.
         jarW, jarH = 4.6 * ppd_h, 5.8 * ppd_v
         rimW, rimH = 5.5 * ppd_h, 0.85 * ppd_v

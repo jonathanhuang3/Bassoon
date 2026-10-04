@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-from bassoonMonitors import save_monitor_gamma
+from bassoonMonitors import max_windowed_size_pixels, save_monitor_gamma
 
 _CALIBRATION_FISH_PATH = Path(__file__).resolve().parent.parent / 'assets' / 'calibration_fish.png'
 _EYELINK_CALIBRATION_CLICK_SOUND = (
@@ -170,6 +170,9 @@ class experiment():
         self.allowGUI = True
         self.screen = 0
         self.fullscr = False
+        # None = fill the selected screen's work area (largest windowed size).
+        # Or set explicitly, e.g. [1280, 720].
+        self.windowedSize = None
         self.backgroundColor = [-1, -1, -1] #doesn't do much, more or less obsolete because it's hardly seen
         self.units = 'pix'
         self.allowStencil = True
@@ -483,15 +486,20 @@ class experiment():
         return self.eyeLinkCalibrationAreaDegrees, self.eyeLinkValidationAreaDegrees
 
     def getPixPerDegXY(self):
-        '''Return (ppd_h, ppd_v) for the stimulus monitor.'''
+        '''Return (ppd_h, ppd_v) for the stimulus monitor / current window.'''
         mon = monitors.Monitor(self.stimMonitor)
         eyeDistance = mon.getDistance()
-        sizePix = mon.currentCalib['sizePix']
+        calibSize = mon.currentCalib['sizePix']
         cmWide = mon.currentCalib['width']
-        cmHigh = cmWide * (float(sizePix[1]) / float(sizePix[0]))
+        cmHigh = cmWide * (float(calibSize[1]) / float(calibSize[0]))
         hFov = 2 * math.degrees(math.atan((cmWide / 2.0) / eyeDistance))
         vFov = 2 * math.degrees(math.atan((cmHigh / 2.0) / eyeDistance))
-        return float(sizePix[0]) / hFov, float(sizePix[1]) / vFov
+        win = getattr(self, 'win', None)
+        if win is not None:
+            sizePix = [float(win.size[0]), float(win.size[1])]
+        else:
+            sizePix = [float(calibSize[0]), float(calibSize[1])]
+        return sizePix[0] / hFov, sizePix[1] / vFov
 
     def getPixPerDeg(self):
         '''Isotropic pixels per degree (geometric mean of H and V).'''
@@ -1096,6 +1104,45 @@ class experiment():
             except Exception:
                 pass
 
+
+    def _enableStimulusWindowResize(self):
+        '''
+        PsychoPy's pyglet backend creates non-resizable windows by default.
+        Mark the handle resizable and, on Windows, add thick-frame style bits
+        so the user can drag the borders when running windowed.
+        '''
+        wh = getattr(self.win, 'winHandle', None)
+        if wh is None or bool(self.fullscr):
+            return
+        try:
+            wh._resizable = True
+        except Exception:
+            pass
+        if platform.system() != 'Windows':
+            return
+        try:
+            import ctypes
+            hwnd = getattr(wh, '_hwnd', None) or getattr(wh, '_view_hwnd', None)
+            if not hwnd:
+                return
+            GWL_STYLE = -16
+            WS_THICKFRAME = 0x00040000
+            WS_MAXIMIZEBOX = 0x00010000
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            style |= WS_THICKFRAME | WS_MAXIMIZEBOX
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+        except Exception as err:
+            print('*** Could not enable stimulus window resize:', err)
+
+
     def startEyeLink(self, gui_root=None):
         '''
         Connect to EyeLink, open an EDF, optionally calibrate, and start recording.
@@ -1286,18 +1333,33 @@ class experiment():
         except Exception as e:
             print('*** Could not save gamma to monitor profile', self.stimMonitor, '(' + str(e) + ').')
 
-        self.win = visual.Window(
-                    allowGUI = allowGui,
-                    monitor = self.stimMonitor,
-                    gamma = self.gamma,
-                    screen = self.screen,
-                    fullscr = self.fullscr,
-                    color = self.backgroundColor,
-                    units = self.units,
-                    useFBO = self.useFBO,
-                    allowStencil = self.allowStencil,
-                    checkTiming = not self.useEyeLink,
-                    )
+        winKw = dict(
+            allowGUI=allowGui,
+            monitor=self.stimMonitor,
+            gamma=self.gamma,
+            screen=self.screen,
+            fullscr=self.fullscr,
+            color=self.backgroundColor,
+            units=self.units,
+            useFBO=self.useFBO,
+            allowStencil=self.allowStencil,
+            checkTiming=not self.useEyeLink,
+        )
+        if not self.fullscr:
+            size = getattr(self, 'windowedSize', None)
+            if size is None or len(list(size)) != 2:
+                size = max_windowed_size_pixels(int(self.screen))
+            else:
+                size = [int(size[0]), int(size[1])]
+            winKw['size'] = size
+            print(
+                '--> Windowed stimulus size {w}x{h} on screen {s}'.format(
+                    w=size[0], h=size[1], s=int(self.screen),
+                )
+            )
+        self.win = visual.Window(**winKw)
+        if not self.fullscr:
+            self._enableStimulusWindowResize()
 
         # When EyeLink is enabled, skip frame-rate measurement until after setup.
         # PsychoPy otherwise shows "Attempting to measure frame rate..." during Window().

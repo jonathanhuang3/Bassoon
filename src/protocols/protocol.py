@@ -178,25 +178,32 @@ class protocol():
         self._actualPreTime = self._preTimeNumFrames * 1/self._FR
         self._actualStimTime = self._stimTimeNumFrames * 1/self._FR
         self._actualTailTime = self._tailTimeNumFrames * 1/self._FR
-    def getPixPerDegXY(self, stimMonitor):
+    def getPixPerDegXY(self, stimMonitor, win=None):
         '''
         Return (ppd_h, ppd_v): pixels per visual degree on each axis.
 
-        Horizontal FOV uses monitor width; vertical FOV uses height inferred from
-        width × (heightPix/widthPix), matching experiment.getMonitorFovDegrees.
+        Physical FOV comes from monitor width/distance (and aspect from the
+        calibration sizePix). Pixel counts come from the current stimulus
+        window when win is provided, so windowed/resized runs map the full
+        calibrated FOV onto the drawable area (dot size and speed in degrees
+        stay consistent relative to the window).
         '''
         mon = monitors.Monitor(stimMonitor.name)
         eyeDistance = mon.getDistance()
-        sizePix = mon.currentCalib['sizePix']
+        calibSize = mon.currentCalib['sizePix']
         cmWide = mon.currentCalib['width']
-        cmHigh = cmWide * (float(sizePix[1]) / float(sizePix[0]))
+        cmHigh = cmWide * (float(calibSize[1]) / float(calibSize[0]))
         hFov = 2 * math.degrees(math.atan((cmWide / 2.0) / eyeDistance))
         vFov = 2 * math.degrees(math.atan((cmHigh / 2.0) / eyeDistance))
-        ppd_h = float(sizePix[0]) / hFov
-        ppd_v = float(sizePix[1]) / vFov
+        if win is not None:
+            sizePix = [float(win.size[0]), float(win.size[1])]
+        else:
+            sizePix = [float(calibSize[0]), float(calibSize[1])]
+        ppd_h = sizePix[0] / hFov
+        ppd_v = sizePix[1] / vFov
         return ppd_h, ppd_v
 
-    def getPixPerDeg(self, stimMonitor):
+    def getPixPerDeg(self, stimMonitor, win=None):
         '''
         Isotropic pixels-per-degree (geometric mean of horizontal and vertical).
 
@@ -204,15 +211,19 @@ class protocol():
         (motion components, circular stimuli that must stay round in degrees).
         '''
         mon = monitors.Monitor(stimMonitor.name)
-        ppd_h, ppd_v = self.getPixPerDegXY(stimMonitor)
+        ppd_h, ppd_v = self.getPixPerDegXY(stimMonitor, win=win)
         ppd = math.sqrt(ppd_h * ppd_v)
+        sizePix = (
+            [float(win.size[0]), float(win.size[1])] if win is not None
+            else mon.currentCalib['sizePix']
+        )
         print(
             'ppd_h={h:.3f} ppd_v={v:.3f} ppd_iso={iso:.3f} | '
             'eyeDistance={d} cmWide={w} sizePix={px}'.format(
                 h=ppd_h, v=ppd_v, iso=ppd,
                 d=mon.getDistance(),
                 w=mon.currentCalib['width'],
-                px=mon.currentCalib['sizePix'],
+                px=sizePix,
             )
         )
         return ppd

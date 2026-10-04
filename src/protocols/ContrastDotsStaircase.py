@@ -563,12 +563,9 @@ class ContrastDotsStaircase(ContrastDots):
             self.postStimTime = 0.0
         self._interStimulusIntervalNumFrames = round(self._FR * self.interStimulusInterval)
         self._postStimTimeNumFrames = round(self._FR * self.postStimTime)
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
-        dotDiameterPix = [
-            float(self.dotSizeDegrees) * ppd_h,
-            float(self.dotSizeDegrees) * ppd_v,
-        ]
-        dotRadiusPix = 0.5 * max(dotDiameterPix)
+        ppd_h, ppd_v, dotDiameterPix, _probeDiameterPix, dotRadiusPix = (
+            self._stimulusScaleFromWin(win)
+        )
         self.dotCoords = np.zeros((self.numberOfDots, 2))
         dots = visual.ElementArrayStim(
             win,
@@ -600,10 +597,25 @@ class ContrastDotsStaircase(ContrastDots):
         return ppd_h, ppd_v, dotDiameterPix, dotRadiusPix, dots, fixationCrossArms
 
 
+    def _refreshTrialGeometry(self, win, dots, fixationCrossArms):
+        '''Recompute ppd / sizes after a window resize (windowed capture).'''
+        ppd_h, ppd_v, dotDiameterPix, _probe, dotRadiusPix = self._stimulusScaleFromWin(win)
+        self._syncFixationCrossGeometry(fixationCrossArms, ppd_h, ppd_v)
+        try:
+            dots.sizes = dotDiameterPix
+        except Exception:
+            pass
+        return ppd_h, ppd_v, dotDiameterPix, dotRadiusPix
+
+
     def _showFixation(self, win, fixationCrossArms, trialClock, durationSec):
         nFrames = max(0, int(round(self._FR * float(durationSec))))
         win.color = self.backgroundColor
+        self._staircaseFixationCrossArms = fixationCrossArms
         for _ in range(nFrames):
+            if self._winSizeKey(win) != getattr(self, '_lastWinSizeKey', None):
+                ppd_h, ppd_v, _dot, _probe, _rad = self._stimulusScaleFromWin(win)
+                self._syncFixationCrossGeometry(fixationCrossArms, ppd_h, ppd_v)
             for arm in fixationCrossArms:
                 arm.draw()
             win.flip()
@@ -655,6 +667,9 @@ class ContrastDotsStaircase(ContrastDots):
         stimSec = float(getattr(self, 'staircaseStimDurationSec', 1.0) or 1.0)
         stimFrames = max(1, int(round(self._FR * stimSec)))
 
+        ppd_h, ppd_v, dotDiameterPix, dotRadiusPix = self._refreshTrialGeometry(
+            win, dots, getattr(self, '_staircaseFixationCrossArms', None),
+        )
         directionRad = math.radians(directionDeg)
         speedComponents = np.array([
             self.speed * ppd_h * (1 / self._FR) * math.cos(directionRad),
@@ -680,6 +695,16 @@ class ContrastDotsStaircase(ContrastDots):
 
         # --- Motion epoch ---
         for _ in range(stimFrames):
+            if self._winSizeKey(win) != getattr(self, '_lastWinSizeKey', None):
+                ppd_h, ppd_v, dotDiameterPix, dotRadiusPix = self._refreshTrialGeometry(
+                    win, dots, getattr(self, '_staircaseFixationCrossArms', None),
+                )
+                speedComponents = np.array([
+                    self.speed * ppd_h * (1 / self._FR) * math.cos(directionRad),
+                    self.speed * ppd_v * (1 / self._FR) * math.sin(directionRad),
+                ])
+                colors = self.dotColorAtContrast(contrast)
+                dots.colors = colors
             if not self._usePersistentDots():
                 self.currentFrames += 1
                 for dot in range(self.numberOfDots):
@@ -737,6 +762,7 @@ class ContrastDotsStaircase(ContrastDots):
         ppd_h, ppd_v, dotDiameterPix, dotRadiusPix, dots, fixationCrossArms = (
             self._setupDotsAndCross(win)
         )
+        self._staircaseFixationCrossArms = fixationCrossArms
         self._initPerRunStimulus(win, (ppd_h, ppd_v))
 
         if self.userInitiated:
@@ -1243,7 +1269,7 @@ class ContrastDotsStaircase(ContrastDots):
         '''
         self.getFR(win)
         fr = float(getattr(self, '_FR', 60) or 60)
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor, win=win)
         # Slightly smaller than Practice so two jars fit the viewport.
         jarW, jarH = 4.6 * ppd_h, 5.8 * ppd_v
         rimW, rimH = 5.5 * ppd_h, 0.85 * ppd_v

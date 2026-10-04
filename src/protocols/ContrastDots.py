@@ -177,6 +177,47 @@ class ContrastDots(protocol):
         ]
 
 
+    def _winSizeKey(self, win):
+        return (int(win.size[0]), int(win.size[1]))
+
+
+    def _stimulusScaleFromWin(self, win):
+        '''
+        Deg→pix scale for the current drawable size.
+
+        Uses the monitor's physical FOV with win.size so resizing a windowed
+        stimulus keeps degree-specified size/speed matched to the window.
+        '''
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor, win=win)
+        dotDiameterPix = [
+            float(self.dotSizeDegrees) * ppd_h,
+            float(self.dotSizeDegrees) * ppd_v,
+        ]
+        probeDiameterPix = [
+            self._attentionProbeSizeDegrees() * ppd_h,
+            self._attentionProbeSizeDegrees() * ppd_v,
+        ]
+        dotRadiusPix = 0.5 * max(dotDiameterPix)
+        self._lastWinSizeKey = self._winSizeKey(win)
+        return ppd_h, ppd_v, dotDiameterPix, probeDiameterPix, dotRadiusPix
+
+
+    def _syncFixationCrossGeometry(self, fixationCrossArms, ppd_h, ppd_v):
+        '''Update black-cross arm length/width after a window resize.'''
+        if not fixationCrossArms:
+            return
+        crossHalfX = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_h
+        crossHalfY = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_v
+        crossLineWidth = max(2.0, min(crossHalfX, crossHalfY) * 2.0 * 0.15)
+        try:
+            fixationCrossArms[0].vertices = ((-crossHalfX, 0.0), (crossHalfX, 0.0))
+            fixationCrossArms[0].lineWidth = crossLineWidth
+            fixationCrossArms[1].vertices = ((0.0, -crossHalfY), (0.0, crossHalfY))
+            fixationCrossArms[1].lineWidth = crossLineWidth
+        except Exception:
+            pass
+
+
     def _motionContrast(self, epoch, frameIndex):
         '''
         Contrast applied on motion frame frameIndex within the current epoch.
@@ -992,18 +1033,9 @@ class ContrastDots(protocol):
         self._actualPostStimTime = self._postStimTimeNumFrames * (1 / self._FR)
 
         random.seed(self.randomSeed)
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
-        # ElementArrayStim size [w, h] so a N° diameter stays circular in degrees.
-        dotDiameterPix = [
-            float(self.dotSizeDegrees) * ppd_h,
-            float(self.dotSizeDegrees) * ppd_v,
-        ]
-        probeDiameterPix = [
-            self._attentionProbeSizeDegrees() * ppd_h,
-            self._attentionProbeSizeDegrees() * ppd_v,
-        ]
-        # Respawn margin: use the larger axis so dots stay fully on-screen.
-        dotRadiusPix = 0.5 * max(dotDiameterPix)
+        ppd_h, ppd_v, dotDiameterPix, probeDiameterPix, dotRadiusPix = (
+            self._stimulusScaleFromWin(win)
+        )
 
         self._initPerRunStimulus(win, (ppd_h, ppd_v))
         self._initAttentionProbeSound()
@@ -1113,6 +1145,11 @@ class ContrastDots(protocol):
                 )
 
             for epochNum, epoch in enumerate(self._epochLog, start=1):
+                # Re-scale if the window was resized (windowed demos / capture).
+                ppd_h, ppd_v, dotDiameterPix, probeDiameterPix, dotRadiusPix = (
+                    self._stimulusScaleFromWin(win)
+                )
+                self._syncFixationCrossGeometry(fixationCrossArms, ppd_h, ppd_v)
                 contrast = float(epoch['contrast'])
                 blockDirection = epoch['direction']
                 blockIndex = epochNum - 1
@@ -1188,6 +1225,15 @@ class ContrastDots(protocol):
                 self._probeResponseOpen = False
 
                 for f in range(self._stimTimeNumFrames):
+                    if self._winSizeKey(win) != getattr(self, '_lastWinSizeKey', None):
+                        ppd_h, ppd_v, dotDiameterPix, probeDiameterPix, dotRadiusPix = (
+                            self._stimulusScaleFromWin(win)
+                        )
+                        self._syncFixationCrossGeometry(fixationCrossArms, ppd_h, ppd_v)
+                        speedComponents = np.array([
+                            self.speed * ppd_h * (1 / self._FR) * math.cos(directionRad),
+                            self.speed * ppd_v * (1 / self._FR) * math.sin(directionRad),
+                        ])
                     frameContrast = self._motionContrast(epoch, f)
                     self._onMotionFrame(f, epoch)
                     if probeEnabled and f in onsetSet and probeIndex is not None:

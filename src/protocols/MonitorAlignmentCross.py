@@ -56,7 +56,7 @@ class MonitorAlignmentCross(protocol):
             )
             event.waitKeys()
 
-        pix_per_deg_h, pix_per_deg_v = self.getPixPerDegXY(win.monitor)
+        pix_per_deg_h, pix_per_deg_v = self.getPixPerDegXY(win.monitor, win=win)
         crossHalfX = 0.5 * float(self.fixationCrossSizeDegrees) * pix_per_deg_h
         crossHalfY = 0.5 * float(self.fixationCrossSizeDegrees) * pix_per_deg_v
         crossLineWidth = max(2.0, min(crossHalfX, crossHalfY) * 2.0 * 0.15)

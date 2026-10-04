@@ -104,6 +104,7 @@ class ContrastDotsQuestPlusPractice(ContrastDotsQuestPlus):
         ppd_h, ppd_v, dotDiameterPix, dotRadiusPix, dots, fixationCrossArms = (
             self._setupDotsAndCross(win)
         )
+        self._staircaseFixationCrossArms = fixationCrossArms
         self._initPerRunStimulus(win, (ppd_h, ppd_v))
 
         nTrials = max(1, int(self.questPlusPracticeTrials))

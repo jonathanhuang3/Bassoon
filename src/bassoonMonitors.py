@@ -64,6 +64,71 @@ def get_screen_size_pixels(screen_index=0):
         return [1920, 1080]
 
 
+def get_screen_work_area_pixels(screen_index=0):
+    '''
+    Return [widthPx, heightPx] of the usable desktop work area for screen_index
+    (excludes Windows taskbar). Falls back to full screen size.
+    '''
+    if os.name == 'nt':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ('cbSize', wintypes.DWORD),
+                    ('rcMonitor', wintypes.RECT),
+                    ('rcWork', wintypes.RECT),
+                    ('dwFlags', wintypes.DWORD),
+                ]
+
+            work_sizes = []
+
+            def _callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                info = MONITORINFO()
+                info.cbSize = ctypes.sizeof(MONITORINFO)
+                if ctypes.windll.user32.GetMonitorInfoW(hMonitor, ctypes.byref(info)):
+                    work = info.rcWork
+                    work_sizes.append([
+                        work.right - work.left,
+                        work.bottom - work.top,
+                    ])
+                else:
+                    rect = lprcMonitor.contents
+                    work_sizes.append([
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                    ])
+                return True
+
+            monitor_enum_proc = ctypes.WINFUNCTYPE(
+                ctypes.c_int,
+                ctypes.c_ulong,
+                ctypes.c_ulong,
+                ctypes.POINTER(wintypes.RECT),
+                ctypes.c_double,
+            )
+            ctypes.windll.user32.EnumDisplayMonitors(
+                0, 0, monitor_enum_proc(_callback), 0,
+            )
+            if 0 <= screen_index < len(work_sizes):
+                return work_sizes[screen_index]
+        except Exception:
+            pass
+    return get_screen_size_pixels(screen_index)
+
+
+def max_windowed_size_pixels(screen_index=0, margin_x=16, margin_y=72):
+    '''
+    Largest practical windowed client size on screen_index without going fullscreen.
+    Shrinks the work area slightly so the OS window chrome still fits.
+    '''
+    work = get_screen_work_area_pixels(screen_index)
+    w = max(640, int(work[0]) - int(margin_x))
+    h = max(480, int(work[1]) - int(margin_y))
+    return [w, h]
+
+
 def register_monitor(name, width_cm, distance_cm, size_pix):
     '''Create or update a PsychoPy monitor calibration file.'''
     monitor = monitors.Monitor(name)

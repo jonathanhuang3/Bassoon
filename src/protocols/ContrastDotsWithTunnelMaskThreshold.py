@@ -171,7 +171,7 @@ class ContrastDotsWithTunnelMaskThreshold(ContrastDotsWithTunnelMask):
 
 
     def run(self, win, informationWin):
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor, win=win)
         widthDeg = float(win.size[0]) / float(ppd_h)
         heightDeg = float(win.size[1]) / float(ppd_v)
         self._autoTunnelPeakDegrees = math.hypot(widthDeg, heightDeg)

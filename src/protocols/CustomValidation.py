@@ -301,7 +301,7 @@ class CustomValidation(protocol):
         self._interStimulusIntervalNumFrames = round(self._FR * self.interStimulusInterval)
         self._actualInterStimulusInterval = self._interStimulusIntervalNumFrames * (1.0 / self._FR)
 
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor, win=win)
         outerW = float(self.targetSizeDegrees) * ppd_h
         outerH = float(self.targetSizeDegrees) * ppd_v
         innerW = float(self.targetInnerSizeDegrees) * ppd_h
