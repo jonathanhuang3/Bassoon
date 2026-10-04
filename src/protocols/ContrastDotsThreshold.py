@@ -24,8 +24,8 @@ class ContrastDotsThreshold(ContrastDots):
         self.contrastStepDuration = 2.0 #seconds spent at each contrast level
         self.contrastPeak = 0.3
         self.postStimTime = 0.0 #no afternystagmus blank; fixation separates trials
-        self.tailTime = 4.0 #seconds - fixation cross between threshold trials
-        self.attentionProbe = False
+        self.tailTime = 4.0 #seconds - fixation cross before first trial and between trials
+        self.attentionProbe = True
         # contrasts is unused for epoch building; kept valid for shared validation helpers.
         self.contrasts = [0.0]
         self._syncStimTimeFromRamp()
@@ -90,7 +90,8 @@ class ContrastDotsThreshold(ContrastDots):
         )
         # Each direction → positive ramp + negative ramp.
         numberOfEpochs = self.stimulusReps * len(self._directionPool()) * 2
-        self._estimatedTime = timePerEpoch * numberOfEpochs
+        # One lead-in fixation (tailTime) before the first dots trial.
+        self._estimatedTime = timePerEpoch * numberOfEpochs + float(self.tailTime)
         return self._estimatedTime
 
 

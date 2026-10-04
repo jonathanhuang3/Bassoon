@@ -69,6 +69,7 @@ from protocols.CustomValidation import CustomValidation
 from protocols.ContrastDotsWithDirectionOffset import ContrastDotsWithDirectionOffset
 from protocols.ContrastDotsPractice import ContrastDotsPractice
 from protocols.ContrastDotsThreshold import ContrastDotsThreshold
+from protocols.ContrastDotsStaircase import ContrastDotsStaircase
 from protocols.MonitorAlignmentCross import MonitorAlignmentCross
 
 class Bassoon:

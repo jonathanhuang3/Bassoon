@@ -20,6 +20,9 @@ from datetime import datetime
 from bassoonMonitors import save_monitor_gamma
 
 _CALIBRATION_FISH_PATH = Path(__file__).resolve().parent.parent / 'assets' / 'calibration_fish.png'
+_EYELINK_CALIBRATION_CLICK_SOUND = (
+    Path(__file__).resolve().parent.parent / 'protocols' / 'sounds' / 'eyelink_calibration_click.mp3'
+)
 
 
 def _loadEyeLinkCoreGraphics():
@@ -54,6 +57,8 @@ class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
         self._pix_per_deg = pix_per_deg
         super().__init__(tracker, win, disableAudio=True)
         self._gui_root = gui_root
+        self._calClickSound = None
+        self._initCalClickSound()
         # Built-in defaults are black-on-black until the Host sends colors.
         bg = list(win.color) if hasattr(win.color, '__len__') else [0.0, 0.0, 0.0]
         self.setCalibrationColors(self._CAL_TARGET_COLOR, bg)
@@ -74,6 +79,34 @@ class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
                 self.setTargetSize(self._CAL_TARGET_SIZE_DEG * self._pix_per_deg)
         self.update_cal_target()
 
+    def _initCalClickSound(self):
+        '''Interface click for Display-PC space during EyeLink calibration.'''
+        self._calClickSound = None
+        path = _EYELINK_CALIBRATION_CLICK_SOUND
+        if not path.is_file():
+            print('*** EyeLink calibration click sound missing:', path)
+            return
+        try:
+            from psychopy import sound
+            snd = sound.Sound(value=str(path), name='eyelinkCalClick')
+            try:
+                snd.setVolume(0.55)
+            except Exception:
+                pass
+            self._calClickSound = snd
+        except Exception as err:
+            print('*** EyeLink calibration click sound failed:', err)
+
+    def _playCalClickSound(self):
+        snd = getattr(self, '_calClickSound', None)
+        if snd is None:
+            return
+        try:
+            snd.stop()
+            snd.play()
+        except Exception:
+            pass
+
     def _pumpGuiEvents(self):
         if self._gui_root is not None:
             try:
@@ -88,7 +121,16 @@ class _BassoonEyeLinkGraphics(_loadEyeLinkCoreGraphics()):
 
     def get_input_key(self):
         self._pumpGuiEvents()
-        return super().get_input_key()
+        ky = super().get_input_key()
+        # Play click when Display-PC space accepts a calibration target.
+        try:
+            for keyInput in ky or []:
+                if getattr(keyInput, '__key__', None) == ord(' '):
+                    self._playCalClickSound()
+                    break
+        except Exception:
+            pass
+        return ky
 
     def update_cal_target(self):
         super().update_cal_target()

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Contrast Dots presents coherent moving dots on a gray background, then an
-optional gray blank for afternystagmus, then a red fixation cross.
+Contrast Dots presents a red fixation cross, then coherent moving dots on a gray
+background, then an optional gray blank for afternystagmus, then another red
+fixation cross (also used between trials).
 
 Optional attention probe: a set number of brief full-red dots appear at random
 times in a disk around current gaze (each lasting one dotLifetime). Probe size is
@@ -17,6 +18,10 @@ import random, math
 import time
 import numpy as np
 
+_ATTENTION_PROBE_REWARD_SOUND = (
+    Path(__file__).resolve().parent / 'sounds' / 'attention_probe_reward.mp3'
+)
+
 
 class ContrastDots(protocol):
     _okrSyncsTrialClock = True
@@ -28,8 +33,8 @@ class ContrastDots(protocol):
         self.interStimulusInterval = 0.0 #seconds - wait time between epochs
         self.preTime = 0.0 #seconds - stationary period before dot motion
         self.stimTime = 20.0 #seconds - moving dots are shown for this duration
-        self.postStimTime = 2.0 #seconds - gray background after dots end, before the red cross (for OKR afternystagmus)
-        self.tailTime = 4.0 #seconds - red fixation cross after the post-stim gray blank
+        self.postStimTime = 0.0 #seconds - gray background after dots end, before the red cross (for OKR afternystagmus)
+        self.tailTime = 4.0 #seconds - red fixation cross before the first trial and after each post-stim gray blank
         self.backgroundColor = [0.0, 0.0, 0.0] #gray background (in RGB, -1 to 1)
 
         # Dot parameters
@@ -56,6 +61,8 @@ class ContrastDots(protocol):
         self.attentionProbeColor = [1.0, -1.0, -1.0] #full red (independent of grayscale contrast block)
         self.attentionProbeKey = 'space'
         self.attentionProbeSound = True #play a short ding on each spacebar press during motion
+        # How long after probe onset a spacebar still counts as a hit (visual flash may be shorter).
+        self.attentionProbeResponseWindowSec = 1.0
 
 
     def _usePersistentDots(self):
@@ -79,7 +86,7 @@ class ContrastDots(protocol):
         if self.spawnStagger < 0:
             tf = False
             errorMessage.append('Spawn Stagger must be 0 or greater.')
-        if getattr(self, 'postStimTime', 2.0) < 0:
+        if getattr(self, 'postStimTime', 0.0) < 0:
             tf = False
             errorMessage.append('Post Stim Time must be 0 or greater.')
         if len(self.contrasts) == 0:
@@ -121,17 +128,24 @@ class ContrastDots(protocol):
                 errorMessage.append('Attention Probe Key must be a non-empty key name (e.g. space).')
             if int(self.attentionProbeCount) > 0:
                 duration = float(self.dotLifetime)
+                responseWindow = float(getattr(self, 'attentionProbeResponseWindowSec', 1.0))
+                spacing = max(duration, responseWindow)
                 if duration <= 0:
                     tf = False
                     errorMessage.append(
                         'Dot Lifetime must be greater than 0 seconds when attention probes are used '
-                        '(probe duration equals dot lifetime).'
+                        '(probe flash duration equals dot lifetime).'
                     )
-                elif float(self.stimTime) < int(self.attentionProbeCount) * duration:
+                elif responseWindow <= 0:
                     tf = False
                     errorMessage.append(
-                        'Stim Time must be at least Attention Probe Count × Dot Lifetime '
-                        'so all probes can appear without overlap.'
+                        'Attention Probe Response Window must be greater than 0 seconds.'
+                    )
+                elif float(self.stimTime) < int(self.attentionProbeCount) * spacing:
+                    tf = False
+                    errorMessage.append(
+                        'Stim Time must be at least Attention Probe Count × '
+                        'max(Dot Lifetime, Response Window) so probe response windows do not overlap.'
                     )
 
         tfColors, colorErrorMessages = self.validateColorInput()
@@ -141,7 +155,7 @@ class ContrastDots(protocol):
 
 
     def estimateTime(self):
-        postStimTime = getattr(self, 'postStimTime', 2.0)
+        postStimTime = getattr(self, 'postStimTime', 0.0)
         timePerEpoch = (
             self.preTime
             + self.stimTime
@@ -150,7 +164,8 @@ class ContrastDots(protocol):
             + self.interStimulusInterval
         )
         numberOfEpochs = self.stimulusReps * len(self.contrasts) * len(self._directionPool())
-        self._estimatedTime = timePerEpoch * numberOfEpochs
+        # One lead-in fixation (tailTime) before the first dots trial.
+        self._estimatedTime = timePerEpoch * numberOfEpochs + float(self.tailTime)
         return self._estimatedTime
 
 
@@ -195,7 +210,7 @@ class ContrastDots(protocol):
 
 
     def _initAttentionProbeSound(self):
-        '''Preload a short marimba-like strike so the first keypress is not delayed.'''
+        '''Preload positive arcade-UI reward SFX (fallback: short synthetic ding).'''
         self._attentionProbeSound = None
         if not getattr(self, 'attentionProbe', False):
             return
@@ -203,34 +218,26 @@ class ContrastDots(protocol):
             return
         try:
             from psychopy import sound
+            rewardPath = _ATTENTION_PROBE_REWARD_SOUND
+            if rewardPath.is_file():
+                self._attentionProbeSound = sound.Sound(
+                    value=str(rewardPath), name='attentionProbeReward',
+                )
+                try:
+                    self._attentionProbeSound.setVolume(0.55)
+                except Exception:
+                    pass
+                return
+            print('*** Attention probe reward sound missing; using synthetic ding.')
             sampleRate = 44100
-            duration = 0.28
+            duration = 0.18
             t = np.linspace(0.0, duration, int(sampleRate * duration), endpoint=False)
-            # Clean marimba key: mallet click + decaying bar partials (slightly stretched).
-            f0 = 698.46  # F5 — bright, clear, not harsh
-            partials = (
-                (1.00, 1.00, 0.055),
-                (2.00, 0.55, 0.035),
-                (3.01, 0.28, 0.022),
-                (4.02, 0.14, 0.015),
-                (5.04, 0.07, 0.010),
-            )
-            wave = np.zeros_like(t)
-            for ratio, amp, tau in partials:
-                wave += amp * np.exp(-t / tau) * np.sin(2.0 * np.pi * f0 * ratio * t)
-            # Soft mallet strike (brief noise burst, high-passed by differencing).
-            rng = np.random.RandomState(7)
-            noise = rng.randn(t.size).astype(np.float64)
-            noise = np.concatenate([[0.0], np.diff(noise)])
-            strikeEnv = np.exp(-t / 0.006)
-            wave += 0.22 * noise * strikeEnv
-            # Very short fade-in so the onset is clean, not clicky-DC.
+            wave = 0.35 * np.sin(2.0 * np.pi * 880.0 * t) * np.exp(-t / 0.06)
+            wave += 0.12 * np.sin(2.0 * np.pi * 1320.0 * t) * np.exp(-t / 0.04)
             attackN = max(1, int(0.002 * sampleRate))
             wave[:attackN] *= np.linspace(0.0, 1.0, attackN)
-            peak = float(np.max(np.abs(wave))) or 1.0
-            wave = (0.40 * wave / peak).astype(np.float32)
             self._attentionProbeSound = sound.Sound(
-                value=wave,
+                value=wave.astype(np.float32),
                 sampleRate=sampleRate,
                 stereo=True,
                 name='attentionProbeHit',
@@ -374,6 +381,8 @@ class ContrastDots(protocol):
         self, probeNumber, probeIndex, ppd_h, ppd_v, trialClock, blockIndex, contrast, frameIndex,
         win=None,
     ):
+        # Close any still-open response window from the previous probe.
+        self._finalizeAttentionProbeResponse(trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex)
         origin = self._getAttentionProbeOriginPix(win) if win is not None else (0.0, 0.0)
         xPix, yPix, xDeg, yDeg = self._randomPointInProbeDisk(
             ppd_h, ppd_v, originPix=origin, win=win,
@@ -382,11 +391,16 @@ class ContrastDots(protocol):
         if getattr(self, 'currentFrames', None) is not None:
             self.currentFrames[probeIndex] = 0
         spawnTime = trialClock.getTime()
-        self._probeActive = True
+        responseWindow = max(0.05, float(getattr(self, 'attentionProbeResponseWindowSec', 1.0)))
+        self._probeActive = True  # red flash visible
+        self._probeResponseOpen = True  # spacebar still counts as a hit
         self._probeNumber = probeNumber
         self._probeSpawnTime = spawnTime
+        self._probeResponseUntil = spawnTime + responseWindow
         self._probeSpawnFrame = frameIndex
         self._probePressCount = 0
+        self._probeLastXPix = xPix
+        self._probeLastYPix = yPix
         self._attentionEvents.append({
             'eventType': 'ProbeSpawn',
             'contrastBlockIndex': blockIndex,
@@ -409,11 +423,48 @@ class ContrastDots(protocol):
 
 
     def _endAttentionProbe(self, trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex):
+        '''End the red flash only; response window may stay open a bit longer.'''
         if not getattr(self, '_probeActive', False):
+            return
+        if probeIndex is not None:
+            xPix, yPix = self.dotCoords[probeIndex]
+            self._probeLastXPix = xPix
+            self._probeLastYPix = yPix
+        self._probeActive = False
+        self._probeSpawnFrame = None
+        # If the response window already elapsed, finalize now; otherwise wait for
+        # spacebar / deadline / next probe.
+        self._maybeFinalizeAttentionProbeResponse(
+            trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex,
+        )
+
+
+    def _maybeFinalizeAttentionProbeResponse(
+        self, trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex,
+    ):
+        if not getattr(self, '_probeResponseOpen', False):
+            return
+        deadline = getattr(self, '_probeResponseUntil', None)
+        if deadline is not None and trialClock.getTime() < deadline:
+            return
+        self._finalizeAttentionProbeResponse(
+            trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex,
+        )
+
+
+    def _finalizeAttentionProbeResponse(
+        self, trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex,
+    ):
+        '''Log ProbeEnd / hit once the response window closes.'''
+        if not getattr(self, '_probeResponseOpen', False):
             return
         endTime = trialClock.getTime()
         pressCount = int(getattr(self, '_probePressCount', 0))
-        xPix, yPix = self.dotCoords[probeIndex]
+        if probeIndex is not None and getattr(self, '_probeActive', False):
+            xPix, yPix = self.dotCoords[probeIndex]
+        else:
+            xPix = float(getattr(self, '_probeLastXPix', 0.0))
+            yPix = float(getattr(self, '_probeLastYPix', 0.0))
         self._attentionEvents.append({
             'eventType': 'ProbeEnd',
             'contrastBlockIndex': blockIndex,
@@ -428,16 +479,19 @@ class ContrastDots(protocol):
             'hit': int(pressCount > 0),
         })
         self._sendOkrEyeLinkMessage(
-            'OKR AttentionProbeEnd B{bi} P{pn} presses={n} t={t:.3f}'.format(
+            'OKR AttentionProbeEnd B{bi} P{pn} presses={n} hit={h} t={t:.3f}'.format(
                 bi=blockIndex,
                 pn=getattr(self, '_probeNumber', 'NA'),
                 n=pressCount,
+                h=int(pressCount > 0),
                 t=endTime,
             )
         )
+        self._probeResponseOpen = False
         self._probeActive = False
         self._probeSpawnTime = None
         self._probeSpawnFrame = None
+        self._probeResponseUntil = None
 
 
     def _applyDotAppearance(self, dots, contrast, probeIndex, fieldDiameterPix, probeDiameterPix):
@@ -488,11 +542,23 @@ class ContrastDots(protocol):
 
         self._playAttentionProbeSound()
         responseTime = trialClock.getTime()
-        if getattr(self, '_probeActive', False) and probeIndex is not None:
+        # Accept presses while the response window is open (may outlast the red flash).
+        self._maybeFinalizeAttentionProbeResponse(
+            trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex,
+        )
+        responseOpen = (
+            getattr(self, '_probeResponseOpen', False)
+            and responseTime <= float(getattr(self, '_probeResponseUntil', responseTime))
+        )
+        if responseOpen:
             self._probePressCount = int(getattr(self, '_probePressCount', 0)) + 1
             spawnTime = getattr(self, '_probeSpawnTime', None)
             rt = (responseTime - spawnTime) if spawnTime is not None else None
-            xPix, yPix = self.dotCoords[probeIndex]
+            if probeIndex is not None and getattr(self, '_probeActive', False):
+                xPix, yPix = self.dotCoords[probeIndex]
+            else:
+                xPix = float(getattr(self, '_probeLastXPix', 0.0))
+                yPix = float(getattr(self, '_probeLastYPix', 0.0))
             self._attentionEvents.append({
                 'eventType': 'ProbeResponse',
                 'contrastBlockIndex': blockIndex,
@@ -791,11 +857,15 @@ class ContrastDots(protocol):
             'FixationITI', startTime, endTime,
             blockOrEpochIndex=blockIndex,
         )
-        self._sendOkrEyeLinkMessage(
-            'OKR FixationITI after B{bi} {t0:.3f}-{t1:.3f}'.format(
+        if blockIndex is None or int(blockIndex) < 0:
+            msg = 'OKR FixationITI lead-in {t0:.3f}-{t1:.3f}'.format(
+                t0=startTime, t1=endTime,
+            )
+        else:
+            msg = 'OKR FixationITI after B{bi} {t0:.3f}-{t1:.3f}'.format(
                 bi=blockIndex, t0=startTime, t1=endTime,
-            ),
-        )
+            )
+        self._sendOkrEyeLinkMessage(msg)
 
 
     def _writeOkrLogFile(self, events):
@@ -877,6 +947,16 @@ class ContrastDots(protocol):
         pass
 
 
+    def _onFixationFrame(self, frameIndex, nFrames):
+        '''Optional per-frame hook during red-cross fixation (lead-in and ITI).'''
+        pass
+
+
+    def _afterProtocolComplete(self, win):
+        '''Optional hook after all epochs finish successfully (subclasses may override).'''
+        pass
+
+
     def _stimulusTitle(self):
         return 'Contrast Dots'
 
@@ -904,7 +984,7 @@ class ContrastDots(protocol):
         self.getFR(win)
 
         if not hasattr(self, 'postStimTime'):
-            self.postStimTime = 2.0
+            self.postStimTime = 0.0
 
         self._interStimulusIntervalNumFrames = round(self._FR * self.interStimulusInterval)
         self._actualInterStimulusInterval = self._interStimulusIntervalNumFrames * (1 / self._FR)
@@ -1002,9 +1082,36 @@ class ContrastDots(protocol):
         )
         # Last ElementArrayStim index draws on top of neighboring field dots.
         probeIndex = self._attentionProbeIndex() if probeEnabled else None
-        probeDurationFrames = max(1, round(self._FR * float(self.dotLifetime)))
+        # Red flash length (visual) vs spacing so response windows do not overlap.
+        probeFlashFrames = max(1, round(self._FR * float(self.dotLifetime)))
+        probeSpacingFrames = max(
+            probeFlashFrames,
+            max(1, round(self._FR * float(getattr(self, 'attentionProbeResponseWindowSec', 1.0)))),
+        )
 
         try:
+            # Same red cross as inter-trial tailTime, shown before the first dots trial.
+            if self._tailTimeNumFrames > 0:
+                win.color = self.backgroundColor
+                fixationStart = None
+                for f in range(self._tailTimeNumFrames):
+                    for arm in fixationCrossArms:
+                        arm.draw()
+                    win.flip()
+                    self._onFixationFrame(f, self._tailTimeNumFrames)
+                    if fixationStart is None:
+                        fixationStart = trialClock.getTime()
+                    if self.checkQuitOrPause():
+                        self._appendOkrFixation(
+                            okrEvents, okrEventCounter, -1,
+                            fixationStart, trialClock.getTime(),
+                        )
+                        return
+                self._appendOkrFixation(
+                    okrEvents, okrEventCounter, -1,
+                    fixationStart, trialClock.getTime(),
+                )
+
             for epochNum, epoch in enumerate(self._epochLog, start=1):
                 contrast = float(epoch['contrast'])
                 blockDirection = epoch['direction']
@@ -1041,6 +1148,8 @@ class ContrastDots(protocol):
                 win.color = self.backgroundColor
                 self.initDotPositions(win, dotRadiusPix)
                 self._probeActive = False
+                self._probeResponseOpen = False
+                self._probeResponseUntil = None
                 startContrast = self._motionContrast(epoch, 0)
                 self._applyDotAppearance(
                     dots, startContrast, probeIndex, dotDiameterPix, probeDiameterPix,
@@ -1071,11 +1180,12 @@ class ContrastDots(protocol):
                     self.initDotSpawnStagger()
                 probeOnsets = self._scheduleProbeOnsetFrames(
                     self._stimTimeNumFrames,
-                    probeDurationFrames,
+                    probeSpacingFrames,
                     int(self.attentionProbeCount) if probeEnabled else 0,
                 )
                 onsetSet = {frame: (i + 1) for i, frame in enumerate(probeOnsets)}
                 self._probeActive = False
+                self._probeResponseOpen = False
 
                 for f in range(self._stimTimeNumFrames):
                     frameContrast = self._motionContrast(epoch, f)
@@ -1090,9 +1200,13 @@ class ContrastDots(protocol):
                         and getattr(self, '_probeActive', False)
                         and probeIndex is not None
                         and getattr(self, '_probeSpawnFrame', None) is not None
-                        and f >= self._probeSpawnFrame + probeDurationFrames
+                        and f >= self._probeSpawnFrame + probeFlashFrames
                     ):
                         self._endAttentionProbe(
+                            trialClock, blockIndex, frameContrast, ppd_h, ppd_v, probeIndex,
+                        )
+                    if probeEnabled:
+                        self._maybeFinalizeAttentionProbeResponse(
                             trialClock, blockIndex, frameContrast, ppd_h, ppd_v, probeIndex,
                         )
 
@@ -1125,10 +1239,9 @@ class ContrastDots(protocol):
                         if self._handleMotionKeys(
                             trialClock, blockIndex, frameContrast, ppd_h, ppd_v, probeIndex,
                         ):
-                            if getattr(self, '_probeActive', False) and probeIndex is not None:
-                                self._endAttentionProbe(
-                                    trialClock, blockIndex, frameContrast, ppd_h, ppd_v, probeIndex,
-                                )
+                            self._finalizeAttentionProbeResponse(
+                                trialClock, blockIndex, frameContrast, ppd_h, ppd_v, probeIndex,
+                            )
                             self._appendOkrContrastBlock(
                                 okrEvents, okrEventCounter, blockIndex, contrast, blockDirection,
                                 motionStart, trialClock.getTime(),
@@ -1145,8 +1258,8 @@ class ContrastDots(protocol):
                         )
                         return
 
-                if getattr(self, '_probeActive', False) and probeIndex is not None:
-                    self._endAttentionProbe(
+                if probeEnabled:
+                    self._finalizeAttentionProbeResponse(
                         trialClock, blockIndex, contrast, ppd_h, ppd_v, probeIndex,
                     )
 
@@ -1183,6 +1296,7 @@ class ContrastDots(protocol):
                     for arm in fixationCrossArms:
                         arm.draw()
                     win.flip()
+                    self._onFixationFrame(f, self._tailTimeNumFrames)
                     if fixationStart is None:
                         fixationStart = trialClock.getTime()
                     if self.checkQuitOrPause():
@@ -1204,6 +1318,7 @@ class ContrastDots(protocol):
                 self._numberOfEpochsCompleted += 1
 
             self._completed = 1
+            self._afterProtocolComplete(win)
         finally:
             self._teardownPerRunStimulus()
             okrLogPath = self._writeOkrLogFile(okrEvents)

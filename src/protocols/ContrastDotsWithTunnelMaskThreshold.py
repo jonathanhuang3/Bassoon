@@ -24,7 +24,7 @@ class ContrastDotsWithTunnelMaskThreshold(ContrastDotsWithTunnelMask):
         self.speed = 10.0
         self.directions = [90.0, 270.0]
         self.contrasts = [1.0]
-        self.attentionProbe = False
+        self.attentionProbe = True
         self.postStimTime = 0.0
         self.tailTime = 4.0 #seconds - fixation cross between tunnel ramp trials
         # Tunnel ramp: start fully occluded, grow clear aperture around gaze.
@@ -106,7 +106,8 @@ class ContrastDotsWithTunnelMaskThreshold(ContrastDotsWithTunnelMask):
             + self.interStimulusInterval
         )
         numberOfEpochs = self.stimulusReps * len(self._directionPool())
-        self._estimatedTime = timePerEpoch * numberOfEpochs
+        # One lead-in fixation (tailTime) before the first dots trial.
+        self._estimatedTime = timePerEpoch * numberOfEpochs + float(self.tailTime)
         return self._estimatedTime
 
 
