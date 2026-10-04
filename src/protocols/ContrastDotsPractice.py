@@ -6,12 +6,11 @@ on the attention-probe task (spacebar) before the real multi-contrast stimulus.
 White dots at 100% contrast move upward by default, with the same size, speed,
 and probe settings as Contrast Dots.
 
-After a completed run, shows a short Candy-Crush-style jar celebration: one
-candy drop per caught probe, a yay SFX at the start, confetti, and
-optional replay.
+After a completed run, shows a first-level jar celebration (single cup):
+starts from nothing, cup animates in, Level Complete!, confetti, and
+optional replay. The staircase later stacks a second cup on top.
 """
 import math
-import time
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +34,7 @@ class ContrastDotsPractice(ContrastDots):
         self.attentionProbe = True
         # Give subjects time to press after the brief red flash (default field lifetime is short).
         self.attentionProbeResponseWindowSec = 1.0
-        # End-of-run celebration (jar fill + sound).
+        # End-of-run celebration (castle + sound).
         self.practiceScoreCelebration = True
         self._practiceReplayRequested = False
 
@@ -76,18 +75,6 @@ class ContrastDotsPractice(ContrastDots):
         return hits, total, falseAlarms, float(min(1.0, max(0.0, fill)))
 
 
-    def _starCount(self, hits, total):
-        if total <= 0:
-            return 0
-        if hits >= total:
-            return 3
-        if hits * 3 >= total * 2:  # at least ~2/3
-            return 2
-        if hits * 3 >= total:  # at least ~1/3
-            return 1
-        return 0
-
-
     def _makeTone(self, freqs, noteDur=0.10, gapDur=0.02, volume=0.55):
         try:
             from psychopy import sound
@@ -96,11 +83,14 @@ class ContrastDotsPractice(ContrastDots):
         sampleRate = 44100
         pieces = []
         for i, freq in enumerate(freqs):
-            n = int(sampleRate * noteDur)
+            n = max(2, int(sampleRate * noteDur))
             t = np.linspace(0.0, noteDur, n, endpoint=False)
             env = np.ones(n)
             attack = max(1, int(0.008 * sampleRate))
             release = max(1, int(0.035 * sampleRate))
+            if attack + release > n:
+                attack = max(1, n // 3)
+                release = max(1, n - attack)
             env[:attack] *= np.linspace(0.0, 1.0, attack)
             env[-release:] *= np.linspace(1.0, 0.0, release)
             wave = volume * np.sin(2 * np.pi * freq * t)
@@ -160,6 +150,55 @@ class ContrastDotsPractice(ContrastDots):
             print('*** Practice celebration tone play failed:', err)
 
 
+    def _makeJarBundle(self, win, jarX, jarY, jarW, jarH, rimW, rimH, ppd_h, ppd_v,
+                       glassColor, fillColor, fillLevel=1.0):
+        jarGlass = visual.Rect(
+            win, width=jarW, height=jarH, pos=(jarX, jarY),
+            units='pix', lineColor=None, fillColor=[0.15, 0.08, 0.02], opacity=0.55,
+        )
+        jarOutline = visual.Rect(
+            win, width=jarW, height=jarH, pos=(jarX, jarY),
+            units='pix', lineColor=glassColor, fillColor=None, lineWidth=8,
+        )
+        jarRim = visual.Rect(
+            win, width=rimW, height=rimH,
+            pos=(jarX, jarY + jarH / 2.0 + rimH / 2.0 - 0.1 * ppd_v),
+            units='pix', lineColor=glassColor, fillColor=[-0.2, -0.25, -0.3],
+            lineWidth=6,
+        )
+        jarFill = visual.Rect(
+            win, width=jarW - 0.45 * ppd_h, height=0.01,
+            pos=(jarX, jarY - jarH / 2.0),
+            units='pix', lineColor=None, fillColor=fillColor, opacity=0.8,
+        )
+        return {
+            'x': jarX, 'y': jarY, 'w': jarW, 'h': jarH,
+            'glass': jarGlass, 'outline': jarOutline, 'rim': jarRim, 'fill': jarFill,
+            'fillLevel': float(fillLevel),
+        }
+
+
+    def _placeJarBundle(self, jar, ox=0.0, oy=0.0, ppd_v=1.0, fillLevel=None):
+        x = jar['x'] + ox
+        y = jar['y'] + oy
+        jar['glass'].pos = (x, y)
+        jar['outline'].pos = (x, y)
+        jar['rim'].pos = (x, y + jar['h'] / 2.0 + jar['rim'].height / 2.0 - 0.1 * ppd_v)
+        level = jar['fillLevel'] if fillLevel is None else float(fillLevel)
+        level = max(0.0, min(1.0, level))
+        fillH = max(0.01, (jar['h'] - 0.35 * ppd_v) * level)
+        jar['fill'].height = fillH
+        jar['fill'].pos = (x, y - jar['h'] / 2.0 + fillH / 2.0 + 0.1 * ppd_v)
+
+
+    def _drawJarBundle(self, jar, ox=0.0, oy=0.0, ppd_v=1.0, fillLevel=None):
+        self._placeJarBundle(jar, ox=ox, oy=oy, ppd_v=ppd_v, fillLevel=fillLevel)
+        jar['glass'].draw()
+        jar['fill'].draw()
+        jar['outline'].draw()
+        jar['rim'].draw()
+
+
     def _afterProtocolComplete(self, win):
         self._practiceReplayRequested = False
         if not getattr(self, 'practiceScoreCelebration', True):
@@ -184,15 +223,16 @@ class ContrastDotsPractice(ContrastDots):
 
     def _showPracticeJarCelebration(self, win, hits, total, falseAlarms, fillFraction):
         '''
-        Discrete candy drops with yay SFX at the start, confetti, continue/replay.
-        Returns 'continue', 'replay', or 'quit'.
+        First-level celebration: blank start, one cup drops in, Level Complete!,
+        fill, outward confetti. Returns 'continue', 'replay', or 'quit'.
         '''
-        win.color = [-0.88, -0.62, -0.42]
-        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        self.getFR(win)
         fr = float(getattr(self, '_FR', 60) or 60)
-        jarW, jarH = 5.5 * ppd_h, 8.0 * ppd_v
-        jarX, jarY = 0.0, -0.8 * ppd_v
-        rimW, rimH = 6.6 * ppd_h, 1.0 * ppd_v
+        ppd_h, ppd_v = self.getPixPerDegXY(win.monitor)
+        # Same cup size as staircase base so level 2 can stack on the same visual language.
+        jarW, jarH = 4.6 * ppd_h, 5.8 * ppd_v
+        rimW, rimH = 5.5 * ppd_h, 0.85 * ppd_v
+        jarX, jarY = 0.0, -1.2 * ppd_v
         glassColor = [0.92, 0.86, 0.78]
         fillColor = [1.0, 0.12, 0.02]
         candyColors = [
@@ -202,75 +242,31 @@ class ContrastDotsPractice(ContrastDots):
             [0.95, 0.9, -0.65],
             [0.65, -0.35, 0.95],
         ]
-        perfect = total > 0 and hits >= total and falseAlarms == 0
+        fillTarget = float(min(1.0, max(0.0, fillFraction)))
+        if fillTarget <= 0.0 and hits <= 0:
+            fillTarget = 0.35  # modest fill so finishing practice still feels rewarding
+        win.color = [-0.88, -0.62, -0.42]
 
-        # Soft jar body (filled glass tint) + outline + rim.
-        jarGlass = visual.Rect(
-            win, width=jarW, height=jarH, pos=(jarX, jarY),
-            units='pix', lineColor=None, fillColor=[0.15, 0.08, 0.02], opacity=0.55,
-        )
-        jarOutline = visual.Rect(
-            win, width=jarW, height=jarH, pos=(jarX, jarY),
-            units='pix', lineColor=glassColor, fillColor=None, lineWidth=8,
-        )
-        jarRim = visual.Rect(
-            win, width=rimW, height=rimH,
-            pos=(jarX, jarY + jarH / 2.0 + rimH / 2.0 - 0.1 * ppd_v),
-            units='pix', lineColor=glassColor, fillColor=[-0.2, -0.25, -0.3],
-            lineWidth=6,
-        )
-        jarFill = visual.Rect(
-            win, width=jarW - 0.45 * ppd_h, height=0.01,
-            pos=(jarX, jarY - jarH / 2.0),
-            units='pix', lineColor=None, fillColor=fillColor, opacity=0.8,
+        jar = self._makeJarBundle(
+            win, jarX, jarY, jarW, jarH, rimW, rimH, ppd_h, ppd_v,
+            glassColor, fillColor, fillLevel=0.0,
         )
 
+        titleHeightFinal = 0.85 * ppd_v
+        titleText = visual.TextStim(
+            win, text='Level Complete!',
+            pos=(0.0, jarY - jarH / 2.0 - 1.35 * ppd_v),
+            units='pix', height=titleHeightFinal,
+            color=[0.98, 0.92, 0.72], bold=True, opacity=0.0,
+        )
         tipText = visual.TextStim(
             win, text='Space = continue      R = practice again',
-            pos=(0.0, -7.5 * ppd_v), units='pix', height=0.55 * ppd_v,
-            color=[0.92, 0.8, 0.62],
+            pos=(0.0, jarY - jarH / 2.0 - 2.35 * ppd_v),
+            units='pix', height=0.45 * ppd_v,
+            color=[0.92, 0.8, 0.62], opacity=0.0,
         )
 
-        dropFrames = max(8, int(round(0.35 * fr)))
-        settleSec = 0.05
-        self._celebrationSoundRefs = []
-        # Freesound "yay" at celebration start (fallback: short chord).
-        yayTone = self._keepCelebrationSound(
-            self._loadCelebrationFileSound(
-                _PRACTICE_YAY_SOUND, volume=0.55, name='practiceYay',
-            )
-        )
-        if yayTone is None:
-            yayTone = self._keepCelebrationSound(
-                self._makeTone(
-                    [659.25, 880.0] if perfect else [523.25, 659.25],
-                    noteDur=0.14, gapDur=0.04, volume=0.55,
-                )
-            )
-
-        # One slot per probe: filled candy if hit, empty ring if miss.
-        nSlots = max(total, 1)
-        slots = []
-        rng = np.random.default_rng(int((hits + 1) * 997 + total * 13))
-        for i in range(nSlots):
-            cx = jarX + float(rng.uniform(-jarW * 0.28, jarW * 0.28))
-            cy = (jarY - jarH / 2.0 + 0.9 * ppd_v) + (jarH - 1.8 * ppd_v) * (i + 0.5) / float(nSlots)
-            slots.append({
-                'home': (cx, cy),
-                'candy': visual.Circle(
-                    win, radius=0.42 * min(ppd_h, ppd_v), pos=(cx, cy + jarH),
-                    units='pix', fillColor=candyColors[i % len(candyColors)],
-                    lineColor=[-0.15, -0.15, -0.15], lineWidth=3,
-                ),
-                'empty': visual.Circle(
-                    win, radius=0.42 * min(ppd_h, ppd_v), pos=(cx, cy),
-                    units='pix', fillColor=None,
-                    lineColor=[0.45, 0.35, 0.25], lineWidth=3,
-                ),
-                'filled': False,
-            })
-
-        # Confetti burst (shown after candy drops whenever there was at least one hit).
+        rng = np.random.default_rng(int((hits + 1) * 997 + total * 13) or 42)
         confetti = []
         for i in range(36):
             confetti.append({
@@ -285,113 +281,24 @@ class ContrastDotsPractice(ContrastDots):
                 'y': jarY + jarH / 2.0,
             })
 
-        event.clearEvents()
-
-        def drawScene(shakeX=0.0, showConfetti=False, confettiT=0.0, filledCount=0):
-            ox = shakeX
-            jarGlass.pos = (jarX + ox, jarY)
-            jarOutline.pos = (jarX + ox, jarY)
-            jarRim.pos = (jarX + ox, jarY + jarH / 2.0 + rimH / 2.0 - 0.1 * ppd_v)
-            level = filledCount / float(max(total, 1))
-            fillH = max(0.01, (jarH - 0.35 * ppd_v) * level)
-            jarFill.height = fillH
-            jarFill.pos = (jarX + ox, jarY - jarH / 2.0 + fillH / 2.0 + 0.1 * ppd_v)
-
-            jarGlass.draw()
-            jarFill.draw()
-            for i, slot in enumerate(slots):
-                hx, hy = slot['home']
-                slot['empty'].pos = (hx + ox, hy)
-                slot['empty'].draw()
-                if slot['filled']:
-                    slot['candy'].pos = (hx + ox, hy)
-                    slot['candy'].draw()
-            jarOutline.draw()
-            jarRim.draw()
-            if showConfetti:
-                for c in confetti:
-                    c['stim'].pos = (
-                        c['x'] + c['vx'] * confettiT + ox,
-                        c['y'] + c['vy'] * confettiT - 6.0 * ppd_v * confettiT * confettiT,
-                    )
-                    c['stim'].draw()
-            tipText.draw()
-
-        # Start empty, then yay immediately as the celebration begins.
-        drawScene(filledCount=0)
-        win.flip()
-        if hits > 0:
-            self._playPreparedSound(yayTone)
-        time.sleep(0.25)
-
-        for hitIndex in range(hits):
-            slot = slots[hitIndex]
-            hx, hy = slot['home']
-            startY = hy + 3.5 * ppd_v
-            for f in range(dropFrames):
-                u = (f + 1) / float(dropFrames)
-                eased = 1.0 - (1.0 - u) ** 2
-                # Slight overshoot bounce at the end.
-                bounce = 0.0
-                if u > 0.85:
-                    bounce = 0.25 * ppd_v * math.sin((u - 0.85) / 0.15 * math.pi)
-                cy = startY + (hy - startY) * eased - bounce
-                slot['candy'].pos = (hx, cy)
-                # Temporary draw of falling candy.
-                drawScene(filledCount=hitIndex)
-                slot['candy'].draw()
-                jarOutline.draw()
-                jarRim.draw()
-                tipText.draw()
-                win.flip()
-                keys = event.getKeys()
-                if keys:
-                    if 'q' in keys:
-                        self._stoppedEarly = 1
-                        return 'quit'
-            slot['filled'] = True
-            # Brief settle frame.
-            drawScene(filledCount=hitIndex + 1)
-            win.flip()
-            time.sleep(settleSec)
-
-        # Mark empty slots for misses (already drawn as rings).
-        for i in range(hits, nSlots):
-            slots[i]['filled'] = False
-
-        # Confetti whenever at least one probe was caught.
-        showConfetti = hits > 0
-
-        if showConfetti:
-            flourishFrames = max(12, int(round(0.9 * fr)))
-            for f in range(flourishFrames):
-                t = (f + 1) / float(flourishFrames)
-                shake = (
-                    (0.18 * ppd_h) * math.sin(t * 10.0 * math.pi) * (1.0 - t)
-                    if perfect else 0.0
+        self._celebrationSoundRefs = []
+        yayTone = self._keepCelebrationSound(
+            self._loadCelebrationFileSound(
+                _PRACTICE_YAY_SOUND, volume=0.55, name='practiceYay',
+            )
+        )
+        if yayTone is None:
+            yayTone = self._keepCelebrationSound(
+                self._makeTone(
+                    [523.25, 659.25, 783.99],
+                    noteDur=0.12, gapDur=0.03, volume=0.50,
                 )
-                drawScene(
-                    shakeX=shake, showConfetti=True, confettiT=t * 0.9, filledCount=hits,
-                )
-                win.flip()
-                keys = event.getKeys()
-                if keys:
-                    if 'q' in keys:
-                        self._stoppedEarly = 1
-                        return 'quit'
-                    if 'r' in keys:
-                        return 'replay'
-                    if 'space' in keys or 'return' in keys or 'enter' in keys:
-                        return 'continue'
+            )
 
-        # Wait for Space (continue) or R (replay).
-        event.clearEvents()
-        while True:
-            drawScene(filledCount=hits, showConfetti=showConfetti, confettiT=0.85)
-            win.flip()
+        def checkKeys():
             keys = [k.lower() for k in event.getKeys()]
             if not keys:
-                continue
+                return None
             if 'q' in keys:
                 self._stoppedEarly = 1
                 return 'quit'
@@ -399,3 +306,123 @@ class ContrastDotsPractice(ContrastDots):
                 return 'replay'
             if 'space' in keys or 'return' in keys or 'enter' in keys:
                 return 'continue'
+            return None
+
+        def drawScene(
+            showJar=False, jarOy=0.0, jarFill=0.0,
+            showConfetti=False, confettiT=0.0, shakeX=0.0,
+            titleScale=0.0, showTip=False,
+        ):
+            if showJar:
+                self._drawJarBundle(
+                    jar, ox=shakeX, oy=jarOy, ppd_v=ppd_v, fillLevel=jarFill,
+                )
+            if showConfetti:
+                for c in confetti:
+                    c['stim'].pos = (
+                        c['x'] + c['vx'] * confettiT + shakeX,
+                        c['y'] + c['vy'] * confettiT - 6.0 * ppd_v * confettiT * confettiT,
+                    )
+                    c['stim'].draw()
+            if titleScale > 0.01:
+                s = max(0.01, min(1.15, float(titleScale)))
+                titleText.height = titleHeightFinal * s
+                titleText.opacity = min(1.0, s / 0.85)
+                titleText.draw()
+            if showTip:
+                tipText.opacity = 1.0
+                tipText.draw()
+
+        event.clearEvents()
+        self._playPreparedSound(yayTone)
+
+        # 0) Start from nothing.
+        blankFrames = max(4, int(round(0.20 * fr)))
+        for _ in range(blankFrames):
+            drawScene()
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
+
+        # 1) First-level cup drops in empty.
+        dropFrames = max(10, int(round(0.50 * fr)))
+        dropStartOy = -4.0 * ppd_v
+        for f in range(dropFrames):
+            u = (f + 1) / float(dropFrames)
+            eased = 1.0 - (1.0 - u) ** 2
+            bounce = 0.0
+            if u > 0.82:
+                bounce = 0.18 * ppd_v * math.sin((u - 0.82) / 0.18 * math.pi)
+            jarOy = dropStartOy * (1.0 - eased) - bounce
+            drawScene(showJar=True, jarOy=jarOy, jarFill=0.0)
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
+
+        # Brief settle shake.
+        settleFrames = max(6, int(round(0.25 * fr)))
+        for f in range(settleFrames):
+            t = (f + 1) / float(settleFrames)
+            shake = (0.12 * ppd_h) * math.sin(t * 8.0 * math.pi) * (1.0 - t)
+            drawScene(showJar=True, jarFill=0.0, shakeX=shake)
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
+
+        # 2) "Level Complete!" pops in below the cup.
+        titleFrames = max(10, int(round(0.45 * fr)))
+        for f in range(titleFrames):
+            u = (f + 1) / float(titleFrames)
+            eased = 1.0 - (1.0 - u) ** 3
+            if u < 0.85:
+                scale = 1.12 * eased / 0.85
+            else:
+                settle = (u - 0.85) / 0.15
+                scale = 1.12 + (1.0 - 1.12) * settle
+            drawScene(showJar=True, jarFill=0.0, titleScale=scale)
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
+
+        # 3) Cup fills (probe catch rate).
+        fillFrames = max(12, int(round(0.55 * fr)))
+        for f in range(fillFrames):
+            t = (f + 1) / float(fillFrames)
+            drawScene(showJar=True, jarFill=t * fillTarget, titleScale=1.0)
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
+
+        # 4) Confetti explodes outward.
+        flourishFrames = max(12, int(round(0.9 * fr)))
+        holdConfettiT = 0.85
+        for f in range(flourishFrames):
+            t = (f + 1) / float(flourishFrames)
+            shake = (0.18 * ppd_h) * math.sin(t * 10.0 * math.pi) * (1.0 - t)
+            drawScene(
+                showJar=True, jarFill=fillTarget,
+                showConfetti=True, confettiT=t * 0.9, shakeX=shake,
+                titleScale=1.0, showTip=True,
+            )
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
+
+        # Hold / wait for continue or replay.
+        event.clearEvents()
+        while True:
+            drawScene(
+                showJar=True, jarFill=fillTarget,
+                showConfetti=True, confettiT=holdConfettiT,
+                titleScale=1.0, showTip=True,
+            )
+            win.flip()
+            action = checkKeys()
+            if action is not None:
+                return action
