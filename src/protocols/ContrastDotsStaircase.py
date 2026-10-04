@@ -11,15 +11,16 @@ Phase 1 — Interleaved polarity staircases (3-down-1-up each):
   If a polarity reaches the contrast floor with no fine reversals
   (still performing well), status=at_floor and θ is set to the floor
   for OKR (left-censored: θ ≤ floor).
-  Dots keep moving until up/down arrow; neutral coin click on response;
-  soft reminder chime at 5 s if no answer yet.
+  Fixed ~1 s coherent motion, then a gray Up/Down prompt that stays until
+  they answer on blank gray (answers also allowed during motion); short
+  black fixation before each trial; marimba click on response.
   Catch trials at |contrast|=1.0 do not update either staircase.
   Once a polarity finishes, only the unfinished polarity is sampled.
 
 Phase 2 — Stacked-jar castle checkpoint (no accuracy readout), then standard
   Contrast Dots OKR blocks at +2/4/8×θ+ and −2/4/8×θ− (capped at ±1.0).
   Attention probes (if enabled) apply only in this OKR phase, not during 2AFC.
-  During OKR red-cross fixation, soft ticks play at 3, 2, and 1 s remaining.
+  During OKR fixation, soft ticks play at 3, 2, and 1 s remaining.
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ from psychopy import event, visual
 from protocols.ContrastDots import ContrastDots
 
 _STAIRCASE_SOUND_DIR = Path(__file__).resolve().parent / 'sounds'
-_STAIRCASE_DIRECTION_SOUND = _STAIRCASE_SOUND_DIR / 'staircase_direction.mp3'
+_STAIRCASE_DIRECTION_SOUND = _STAIRCASE_SOUND_DIR / 'marimba_click.wav'
 _STAIRCASE_YAY_SOUND = _STAIRCASE_SOUND_DIR / 'practice_yay.mp3'
 
 
@@ -64,8 +65,10 @@ class ContrastDotsStaircase(ContrastDots):
         # With 2 fine reversals required, early-stop minimum matches full completion.
         self.staircaseEarlyStopMinFineReversals = 2
         self.staircaseCatchEvery = 12  # fewer catches; still a compliance check
-        self.staircaseResponseReminderSec = 5.0
-        self.staircaseITI = 0.5  # brief fixation between staircase trials
+        self.staircaseStimDurationSec = 0.5  # fixed coherent-motion presentation
+        # Gray Up/Down screen after motion stays until they answer (no timeout).
+        self.staircaseResponseReminderSec = 5.0  # soft chime if still waiting to answer
+        self.staircaseITI = 0.5  # brief black fixation before each 2AFC trial
         # Allow both polarities to reach the floor under 3-down-1-up.
         self.staircaseMaxTrials = 56
         self.staircaseMaxAdaptivePerPolarity = 24
@@ -74,7 +77,7 @@ class ContrastDotsStaircase(ContrastDots):
         self.staircaseCatchMinAccuracy = 0.80
         self.staircaseDirections = [90.0, 270.0]  # 2AFC motion directions
         self.okrThresholdMultipliers = [2.0, 4.0, 8.0]
-        # Soft ticks during OKR red-cross fixation when 3/2/1 s remain.
+        # Soft ticks during OKR fixation when 3/2/1 s remain.
         self.okrFixationCountdownSec = 3
         self._okrFixationCountdownSounds = {}
         # Subject-facing stacked-jar castle between staircase and OKR (no θ readout).
@@ -477,7 +480,7 @@ class ContrastDotsStaircase(ContrastDots):
 
 
     def _initStaircaseSounds(self):
-        # Neutral coin click on up/down (same for correct/incorrect — no performance feedback).
+        # Marimba click on up/down (same for correct/incorrect — no performance feedback).
         self._confirmSound = self._loadFileSound(
             _STAIRCASE_DIRECTION_SOUND, volume=0.55, name='staircaseDirection',
         )
@@ -515,7 +518,7 @@ class ContrastDotsStaircase(ContrastDots):
 
 
     def _initOkrFixationCountdownSounds(self):
-        '''Soft ticks for 3 / 2 / 1 s remaining on the red fixation cross.'''
+        '''Soft ticks for 3 / 2 / 1 s remaining on the fixation cross.'''
         self._okrFixationCountdownSounds = {}
         # Slightly rising pitches so the sequence feels like a ready cue.
         pitchBySec = {3: 660.0, 2: 770.0, 1: 880.0}
@@ -609,16 +612,49 @@ class ContrastDotsStaircase(ContrastDots):
         return True
 
 
+    def _pollStaircaseResponseKeys(self, pauseSecRef):
+        '''
+        Handle q / pause / up / down during a 2AFC trial.
+        pauseSecRef is a one-element list mutated with added pause time.
+        Returns (responseDir or None, quitEarly).
+        '''
+        keys = [k.lower() for k in event.getKeys()]
+        if not keys:
+            return None, False
+        if 'q' in keys:
+            self._stoppedEarly = 1
+            return None, True
+        if 'p' in keys:
+            self._userPauseCount += 1
+            print('*** STIMULUS HAS PAUSED. Press any key to resume')
+            startPause = time.time()
+            event.waitKeys()
+            dur = time.time() - startPause
+            pauseSecRef[0] += dur
+            self._userPauseDurations.append(dur)
+            return None, False
+        if 'up' in keys:
+            return 90.0, False
+        if 'down' in keys:
+            return 270.0, False
+        return None, False
+
+
     def _runStaircaseTrial(
         self, win, dots, dotDiameterPix, dotRadiusPix, ppd_h, ppd_v,
         contrast, directionDeg, trialClock,
     ):
         '''
-        Flickering coherent dots until up/down.
+        Fixed-duration coherent motion, then blank gray until they answer.
+        Responses are accepted during motion and during the open-ended response screen.
+        No response timeout (experimenter can verbally encourage an answer).
 
         Returns (responseDir, correct, reactionTimeSec, reminderBeep, quit).
         reactionTimeSec excludes mid-trial pause time.
         '''
+        stimSec = float(getattr(self, 'staircaseStimDurationSec', 1.0) or 1.0)
+        stimFrames = max(1, int(round(self._FR * stimSec)))
+
         directionRad = math.radians(directionDeg)
         speedComponents = np.array([
             self.speed * ppd_h * (1 / self._FR) * math.cos(directionRad),
@@ -635,11 +671,15 @@ class ContrastDotsStaircase(ContrastDots):
         win.color = self.backgroundColor
         event.clearEvents()
         t0 = trialClock.getTime()
-        pauseSec = 0.0
+        pauseSecRef = [0.0]
         reminded = False
         responseDir = None
 
-        while responseDir is None:
+        def elapsedNow():
+            return trialClock.getTime() - t0 - pauseSecRef[0]
+
+        # --- Motion epoch ---
+        for _ in range(stimFrames):
             if not self._usePersistentDots():
                 self.currentFrames += 1
                 for dot in range(self.numberOfDots):
@@ -654,34 +694,33 @@ class ContrastDotsStaircase(ContrastDots):
             self._renderDotsFrame(win, dots)
             win.flip()
 
-            # Active viewing time only (pauses excluded) for reminder + RT.
-            elapsed = trialClock.getTime() - t0 - pauseSec
+            elapsed = elapsedNow()
             if (not reminded) and elapsed >= float(self.staircaseResponseReminderSec):
                 self._playReminderBeep()
                 reminded = True
 
-            keys = [k.lower() for k in event.getKeys()]
-            if not keys:
-                continue
-            if 'q' in keys:
-                self._stoppedEarly = 1
+            responseDir, quitEarly = self._pollStaircaseResponseKeys(pauseSecRef)
+            if quitEarly:
                 return None, False, elapsed, int(reminded), True
-            if 'p' in keys:
-                self._userPauseCount += 1
-                print('*** STIMULUS HAS PAUSED. Press any key to resume')
-                startPause = time.time()
-                event.waitKeys()
-                dur = time.time() - startPause
-                pauseSec += dur
-                self._userPauseDurations.append(dur)
-                continue
-            if 'up' in keys:
-                responseDir = 90.0
-            elif 'down' in keys:
-                responseDir = 270.0
+            if responseDir is not None:
+                break
 
+        # --- Blank gray until they answer (no on-screen prompt) ---
+        while responseDir is None:
+            win.color = self.backgroundColor
+            win.flip()
+
+            elapsed = elapsedNow()
+            if (not reminded) and elapsed >= float(self.staircaseResponseReminderSec):
+                self._playReminderBeep()
+                reminded = True
+
+            responseDir, quitEarly = self._pollStaircaseResponseKeys(pauseSecRef)
+            if quitEarly:
+                return None, False, elapsed, int(reminded), True
+
+        rt = elapsedNow()
         self._playConfirmSound()
-        rt = trialClock.getTime() - t0 - pauseSec
         correct = abs(self.deg0to360(responseDir) - self.deg0to360(directionDeg)) < 1e-6
         return responseDir, correct, rt, int(reminded), False
 
@@ -704,7 +743,7 @@ class ContrastDotsStaircase(ContrastDots):
             self.showInformationText(
                 win,
                 'Stimulus Information: {title}\n'
-                'Judge motion direction — press UP or DOWN arrow\n'
+                'Judge motion direction — brief moving dots, then UP or DOWN\n'
                 'Press any key to begin staircase'.format(title=self._stimulusTitle()),
             )
             event.waitKeys()
@@ -767,7 +806,10 @@ class ContrastDotsStaircase(ContrastDots):
 
             trialMagnitude = abs(contrast)
             stimLabel = 'up' if abs(self.deg0to360(directionDeg) - 90.0) < 1e-6 else 'down'
-            respLabel = 'up' if abs(self.deg0to360(responseDir) - 90.0) < 1e-6 else 'down'
+            if responseDir is None:
+                respLabel = 'none'
+            else:
+                respLabel = 'up' if abs(self.deg0to360(responseDir) - 90.0) < 1e-6 else 'down'
             reversal = False
             stepDir = 0
             phaseAtTrial = 'catch'
@@ -800,7 +842,7 @@ class ContrastDotsStaircase(ContrastDots):
                 'polarity': polarity,
                 'directionDeg': directionDeg,
                 'stimulusLabel': stimLabel,
-                'responseDeg': responseDir,
+                'responseDeg': float('nan') if responseDir is None else responseDir,
                 'responseLabel': respLabel,
                 'correct': int(correct),
                 'reactionTimeSec': rt,
@@ -831,7 +873,7 @@ class ContrastDotsStaircase(ContrastDots):
                     c=contrast,
                     stim=stimLabel,
                     resp=respLabel,
-                    ok='CORRECT' if correct else 'WRONG',
+                    ok='CORRECT' if correct else ('TIMEOUT' if responseDir is None else 'WRONG'),
                     rt=rt,
                     rev=' REVERSAL' if reversal else '',
                     fp=len(states[1.0]['fineRevs']),
@@ -1014,10 +1056,14 @@ class ContrastDotsStaircase(ContrastDots):
             '# Contrast Dots Staircase Log',
             '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
             '# Method: dual-polarity 2AFC {down}-down-1-up; coarse halve; '
-            'fine {log:g} log10; {n} fine reversals per polarity'.format(
+            'fine {log:g} log10; {n} fine reversals per polarity; '
+            'stim={stim:g}s + open response screen until answer; '
+            'preTrialFixation={iti:g}s'.format(
                 down=int(self.staircaseCorrectToStepDown),
                 log=float(self.staircaseFineLogStep),
                 n=int(self.staircaseFineReversals),
+                stim=float(getattr(self, 'staircaseStimDurationSec', 1.0)),
+                iti=float(self.staircaseITI),
             ),
             '# ThresholdContrastPositive: {t}'.format(t=_thr(self.thresholdContrastPositive)),
             '# ThresholdStatusPositive: {s}'.format(
@@ -1075,7 +1121,12 @@ class ContrastDotsStaircase(ContrastDots):
                 '{:.1f}'.format(float(row['polarity'])),
                 '{:.4f}'.format(float(row['directionDeg'])),
                 str(row['stimulusLabel']),
-                '{:.4f}'.format(float(row['responseDeg'])),
+                (
+                    'NA' if (
+                        row.get('responseDeg') is None
+                        or (isinstance(row.get('responseDeg'), float) and math.isnan(row['responseDeg']))
+                    ) else '{:.4f}'.format(float(row['responseDeg']))
+                ),
                 str(row['responseLabel']),
                 str(row['correct']),
                 '{:.4f}'.format(float(row['reactionTimeSec'])),

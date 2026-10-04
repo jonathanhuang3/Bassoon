@@ -70,6 +70,8 @@ from protocols.ContrastDotsWithDirectionOffset import ContrastDotsWithDirectionO
 from protocols.ContrastDotsPractice import ContrastDotsPractice
 from protocols.ContrastDotsThreshold import ContrastDotsThreshold
 from protocols.ContrastDotsStaircase import ContrastDotsStaircase
+from protocols.ContrastDotsQuestPlus import ContrastDotsQuestPlus
+from protocols.ContrastDotsQuestPlusPractice import ContrastDotsQuestPlusPractice
 from protocols.MonitorAlignmentCross import MonitorAlignmentCross
 
 class Bassoon:

@@ -5,7 +5,7 @@ ramp: dots start at mid-gray (contrast 0) and step toward full white (+peak) or
 full black (-peak) by contrastStep every contrastStepDuration seconds.
 
 For each direction in directions, one positive ramp trial and one negative ramp
-trial are shown. Trials are separated by the red fixation cross (tailTime).
+trial are shown. Trials are separated by the black fixation cross (tailTime).
 """
 from protocols.ContrastDots import ContrastDots
 

@@ -3,11 +3,11 @@
 Contrast Dots with Tunnel Mask Threshold ramps a gaze-contingent tunnel aperture
 from 0° diameter up in fixed steps (default +1° every 2 s) until a peak size.
 
-Peak defaults to 0, which means "full screen" (screen diagonal in degrees,
-computed at run time). Set tunnelPeakDiameterDegrees > 0 to stop at a fixed size.
+Peak defaults to 31° (≈ vertical FOV on a 27″ monitor at 60 cm).
+Set tunnelPeakDiameterDegrees to 0 for full-screen diagonal at run time.
 
 For each direction in directions, one expanding-tunnel trial is shown, separated
-by the red fixation cross (tailTime). Dots stay at full white contrast.
+by the black fixation cross (tailTime). Dots stay at full white contrast.
 """
 import math
 
@@ -24,15 +24,15 @@ class ContrastDotsWithTunnelMaskThreshold(ContrastDotsWithTunnelMask):
         self.speed = 10.0
         self.directions = [90.0, 270.0]
         self.contrasts = [1.0]
-        self.attentionProbe = True
+        self.attentionProbe = False
         self.postStimTime = 0.0
         self.tailTime = 4.0 #seconds - fixation cross between tunnel ramp trials
         # Tunnel ramp: start fully occluded, grow clear aperture around gaze.
         self.tunnelVisibleDiameterDegrees = 0.0
         self.tunnelStepDegrees = 1.0
         self.tunnelStepDuration = 2.0 #seconds spent at each diameter
-        self.tunnelPeakDiameterDegrees = 0.0 #0 = full-screen diagonal at run time
-        self._autoTunnelPeakDegrees = 50.0 #fallback for time estimates before a window exists
+        self.tunnelPeakDiameterDegrees = 31.0  # ≈ VFOV @ 27″ / 60 cm; 0 = full-screen diagonal
+        self._autoTunnelPeakDegrees = 31.0  # fallback for time estimates before a window exists
         self._currentTunnelDiameter = None
         self._syncStimTimeFromRamp()
 

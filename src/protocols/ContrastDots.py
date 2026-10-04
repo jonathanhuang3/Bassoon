@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Contrast Dots presents a red fixation cross, then coherent moving dots on a gray
-background, then an optional gray blank for afternystagmus, then another red
+Contrast Dots presents a black fixation cross, then coherent moving dots on a gray
+background, then an optional gray blank for afternystagmus, then another black
 fixation cross (also used between trials).
 
 Optional attention probe: a set number of brief full-red dots appear at random
@@ -33,8 +33,8 @@ class ContrastDots(protocol):
         self.interStimulusInterval = 0.0 #seconds - wait time between epochs
         self.preTime = 0.0 #seconds - stationary period before dot motion
         self.stimTime = 20.0 #seconds - moving dots are shown for this duration
-        self.postStimTime = 0.0 #seconds - gray background after dots end, before the red cross (for OKR afternystagmus)
-        self.tailTime = 4.0 #seconds - red fixation cross before the first trial and after each post-stim gray blank
+        self.postStimTime = 0.0 #seconds - gray background after dots end, before the fixation cross (for OKR afternystagmus)
+        self.tailTime = 4.0 #seconds - black fixation cross before the first trial and after each post-stim gray blank
         self.backgroundColor = [0.0, 0.0, 0.0] #gray background (in RGB, -1 to 1)
 
         # Dot parameters
@@ -50,7 +50,7 @@ class ContrastDots(protocol):
         self.speed = 10.0 #degrees per second
 
         # Fixation cross shown during tail time
-        self.fixationCrossColor = [1.0, -1.0, -1.0] #red (in RGB, -1 to 1)
+        self.fixationCrossColor = [-1.0, -1.0, -1.0] #black (in RGB, -1 to 1)
         self.fixationCrossSizeDegrees = 1.0 #degrees - tip-to-tip span (same visual extent scale as dotSizeDegrees)
 
         # Attention probe: N discrete full-red flashes near gaze during each motion block.
@@ -948,7 +948,7 @@ class ContrastDots(protocol):
 
 
     def _onFixationFrame(self, frameIndex, nFrames):
-        '''Optional per-frame hook during red-cross fixation (lead-in and ITI).'''
+        '''Optional per-frame hook during fixation cross (lead-in and ITI).'''
         pass
 
 
@@ -1090,7 +1090,7 @@ class ContrastDots(protocol):
         )
 
         try:
-            # Same red cross as inter-trial tailTime, shown before the first dots trial.
+            # Same fixation cross as inter-trial tailTime, shown before the first dots trial.
             if self._tailTimeNumFrames > 0:
                 win.color = self.backgroundColor
                 fixationStart = None
