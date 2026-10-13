@@ -105,12 +105,11 @@ class protocol():
     def printDescription(self, attributeName):
        ''' Given an attribute name, this function prints the description of that attribute (i.e., the comment next to it's initiation). It is called when each info button is hit in the editProtocol function in main.py'''
        descriptions = {}
-       descriptions.update(self._get_attribute_descriptions(self.__class__))
-              
-       # Check the superclass if it exists and has an init method
+       # Superclass comments first; subclass comments override (more specific).
        for base in self.__class__.__bases__:
            if hasattr(base, '__init__'):
                descriptions.update(self._get_attribute_descriptions(base))
+       descriptions.update(self._get_attribute_descriptions(self.__class__))
 
        description = descriptions.get(attributeName, "Info is not available. Add a descriptive comment to the attribute initialization in the protocol's __init__() function to change this.")
        print('--> ', attributeName, ': ', description)

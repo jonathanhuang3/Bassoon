@@ -37,6 +37,26 @@ import random
 SRC_DIR = Path(__file__).resolve().parent
 os.chdir(SRC_DIR)
 
+
+def protocolClassNameToDisplayName(pname):
+    '''
+    CamelCase protocol class/file name → GUI label.
+    Keeps acronyms intact, e.g. DirectionalDotsVRComparison →
+    "Directional Dots VR Comparison" (not "Directional dots v r comparison").
+    '''
+    out = []
+    for i, char in enumerate(pname):
+        if i > 0 and char.isupper():
+            prev = pname[i - 1]
+            nxt = pname[i + 1] if i + 1 < len(pname) else ''
+            # Space before a new word: after a lowercase, or at the end of an
+            # acronym (uppercase followed by lowercase, e.g. VR|Comparison).
+            if prev.islower() or (prev.isupper() and nxt.islower()):
+                out.append(' ')
+        out.append(char)
+    return ''.join(out)
+
+
 # Each protocol subclass must be imported here:
 from experiments.experiment import experiment
 from bassoonMonitors import ensure_bassoon_monitors, save_monitor_gamma
@@ -59,6 +79,7 @@ from protocols.Flicker import Flicker
 from protocols.SumOfSinesOscillation import SumOfSinesOscillation
 from protocols.GlassPatterns import GlassPatterns
 from protocols.DirectionalDots import DirectionalDots
+from protocols.DirectionalDotsVRComparison import DirectionalDotsVRComparison
 from protocols.ContrastDots import ContrastDots
 from protocols.ContrastDotsWithTunnelMask import ContrastDotsWithTunnelMask
 from protocols.ContrastDotsWithTunnelMaskThreshold import ContrastDotsWithTunnelMaskThreshold
@@ -203,12 +224,7 @@ class Bassoon:
 
 
             #build the display name
-            pnameWithSpaces = ''
-            for j, char in enumerate(pname):
-                if char.isupper() and j != 0:
-                    pnameWithSpaces += ' ' + char.lower()
-                else:
-                    pnameWithSpaces += char
+            pnameWithSpaces = protocolClassNameToDisplayName(pname)
             self.experimentSketch.append((pnameWithSpaces, newObj))
 
         self.updateExperimentSketch()
@@ -226,14 +242,7 @@ class Bassoon:
             '.py') and p != 'protocol.py' and p != '__init__.py']
         self.protocolList.sort()
         for i, pname in enumerate(self.protocolList):
-            pnameWithSpaces = ''
-            for j, char in enumerate(pname):
-                if char.isupper() and j != 0:
-                    pnameWithSpaces += ' ' + char.lower()
-                else:
-                    pnameWithSpaces += char
-
-            self.protocolList[i] = pnameWithSpaces
+            self.protocolList[i] = protocolClassNameToDisplayName(pname)
             
 
     def changeProtocolIndex(self, e=0):

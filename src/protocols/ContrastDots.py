@@ -951,14 +951,11 @@ class ContrastDots(protocol):
 
 
     def respawnDot(self, win, dotRadiusPix, dot=None):
-        xPos = random.uniform(
-            -win.size[0] / 2 + dotRadiusPix * 2,
-            win.size[0] / 2 - dotRadiusPix * 2,
-        )
-        yPos = random.uniform(
-            -win.size[1] / 2 + dotRadiusPix * 2,
-            win.size[1] / 2 - dotRadiusPix * 2,
-        )
+        '''Place a dot anywhere on screen (no edge inset; may clip at borders).'''
+        halfW = win.size[0] / 2.0
+        halfH = win.size[1] / 2.0
+        xPos = random.uniform(-halfW, halfW)
+        yPos = random.uniform(-halfH, halfH)
         if dot is not None:
             self.currentFrames[dot] = 0
             self.dotCoords[dot] = [xPos, yPos]
@@ -966,12 +963,11 @@ class ContrastDots(protocol):
 
 
     def _wrapPersistentDotCoords(self, win, dotRadiusPix):
-        '''Keep persistent dots on screen by wrapping coordinates at the edges.'''
-        margin = dotRadiusPix * 2
-        xMin = -win.size[0] / 2 + margin
-        xMax = win.size[0] / 2 - margin
-        yMin = -win.size[1] / 2 + margin
-        yMax = win.size[1] / 2 - margin
+        '''Keep persistent dots on screen by wrapping at the window edges.'''
+        xMin = -win.size[0] / 2.0
+        xMax = win.size[0] / 2.0
+        yMin = -win.size[1] / 2.0
+        yMax = win.size[1] / 2.0
         xSpan = xMax - xMin
         ySpan = yMax - yMin
         self.dotCoords[:, 0] = xMin + ((self.dotCoords[:, 0] - xMin) % xSpan)

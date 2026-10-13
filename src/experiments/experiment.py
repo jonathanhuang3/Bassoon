@@ -1478,22 +1478,25 @@ class experiment():
         win.flip()
         win.flip()
 
+        waitingText = 'Waiting Room\n\nPress Enter to Start'
         label = visual.TextStim(
             win=win,
-            text='Waiting Room',
+            text=waitingText,
             color=black,
             units='pix',
             height=48,
+            wrapWidth=win.size[0] * 0.9,
         )
         infoLabel = None
         if self.useInformationMonitor and getattr(self, 'informationWin', None) is not None:
             self.informationWin.color = midGray
             infoLabel = visual.TextStim(
                 win=self.informationWin,
-                text='Waiting Room',
+                text=waitingText,
                 color=black,
                 units='pix',
                 height=48,
+                wrapWidth=self.informationWin.size[0] * 0.9,
             )
 
         print(
