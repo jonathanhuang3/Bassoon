@@ -212,7 +212,7 @@ class experiment():
         self.eyeLinkDummy = False # True = no Host PC; pylink dummy tracker
         self.eyeLinkIP = '100.1.1.1' # Host PC address on the dedicated Ethernet link
         self.eyeLinkEDF = 'BASS.EDF' # Host filename, 8 chars + .EDF
-        self.eyeLinkEDFDir = '' # folder on the Bassoon PC for downloaded EDFs; empty means current working directory
+        self.eyeLinkEDFDir = '' # scratch folder for the current run; saveExperiment moves those files next to the experiment file
         self.eyeLinkCalTarget = 'standard' # 'standard' (circles) or 'fish' (1 deg fish icon)
         # EyeLink cal/val grid size as ± visual degrees from screen center (H, V).
         # Total grid width/height = 2× these values. Converted to EyeLink proportions via monitor FOV.
@@ -268,7 +268,6 @@ class experiment():
                     self.eyeLinkDummy = configOptions['experiment'].get('eyeLinkDummy', False)
                     self.eyeLinkIP = configOptions['experiment'].get('eyeLinkIP', '100.1.1.1')
                     self.eyeLinkEDF = configOptions['experiment'].get('eyeLinkEDF', 'BASS.EDF')
-                    self.eyeLinkEDFDir = configOptions['experiment'].get('eyeLinkEDFDir', '')
                     self.eyeLinkCalTarget = configOptions['experiment'].get('eyeLinkCalTarget', 'standard')
                     self.eyeLinkCalibrationAreaDegrees = configOptions['experiment'].get(
                         'eyeLinkCalibrationAreaDegrees', None,
@@ -593,8 +592,9 @@ class experiment():
 
     def _resolveEyeLinkSaveDir(self):
         '''
-        Folder on this computer where downloaded EDF files are written.
-        Uses Options → EDF Save Folder when it is a valid path; otherwise the current working directory.
+        Folder on this computer where EyeLink and session logs are written during a run.
+        runExperiment points eyeLinkEDFDir at a temporary folder. saveExperiment then moves
+        those files next to the chosen experiment file. An empty path uses the current working directory.
         '''
         requested = str(self.eyeLinkEDFDir).strip()
         if requested == '':
@@ -980,7 +980,7 @@ class experiment():
 
     def _saveEyeLinkCalibrationJson(self, edfName, scn_w, scn_h):
         '''
-        Save the last EyeLink calibration/validation result to a JSON file in the EDF save folder.
+        Save the last EyeLink calibration/validation result beside the other EyeLink files for this run.
         '''
         if self._elTracker is None:
             return None
@@ -1266,7 +1266,7 @@ class experiment():
 
     def stopEyeLink(self):
         '''
-        Stop recording, close the EDF, and download it to the folder chosen in Options (or the working directory if that folder is blank).
+        Stop recording, close the EDF, and download it into eyeLinkEDFDir (the run's temporary folder).
         Safe to call if EyeLink never started.
         '''
         if self._elTracker is None:

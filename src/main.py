@@ -32,6 +32,8 @@ import math
 import time
 import copy
 import random
+import shutil
+import tempfile
 
 # Set the working directory to the directory of this script
 SRC_DIR = Path(__file__).resolve().parent
@@ -103,6 +105,7 @@ class Bassoon:
         
         # initialize the experiment
         self.experiment = experiment()
+        self._eyeLinkScratchDir = None
         ensure_bassoon_monitors(screen_index=self.experiment.screen)
 
         # create mainframe and menu
@@ -791,16 +794,14 @@ class Bassoon:
         eyeLinkEDFEntry = Entry(eyeLinkFrame, textvariable=self.eyeLinkEDFSelection, width=12)
         eyeLinkEDFEntry.grid(row=1, column=3)
 
-        eyeLinkDirLabel = Label(eyeLinkFrame, text='EDF Save Folder', padx=10)
-        eyeLinkDirLabel.grid(row=2, column=0, sticky='w')
-        self.eyeLinkEDFDirSelection = StringVar(root)
-        self.eyeLinkEDFDirSelection.set(self.experiment.eyeLinkEDFDir)
-        eyeLinkDirEnt = Entry(eyeLinkFrame, textvariable=self.eyeLinkEDFDirSelection, width=40)
-        eyeLinkDirEnt.grid(row=2, column=2, columnspan=2, sticky='ew')
-        eyeLinkDirBtn = Button(
-            eyeLinkFrame, text='Browse', padx=7,
-            command=lambda ent=eyeLinkDirEnt: self.findEyeLinkSaveFolder(monitorEditWindow, ent))
-        eyeLinkDirBtn.grid(row=2, column=1, sticky='w', padx=(0, 10))
+        eyeLinkSaveNote = Label(
+            eyeLinkFrame,
+            text='EDF, ASC, calibration, and session logs are saved next to the experiment file when the run ends.',
+            padx=10,
+            wraplength=520,
+            justify='left',
+        )
+        eyeLinkSaveNote.grid(row=2, column=0, columnspan=4, sticky='w')
 
         eyeLinkCalTargetLabel = Label(eyeLinkFrame, text='Cal Target', padx=10)
         eyeLinkCalTargetLabel.grid(row=3, column=0, sticky='w')
@@ -1186,18 +1187,6 @@ class Bassoon:
         entry.insert(0,self.experiment.warpFileName)
 
 
-    def findEyeLinkSaveFolder(self, window, entry):
-        '''Choose the folder on this computer where downloaded EyeLink EDF files will be saved.'''
-        chosen = tkfd.askdirectory(title='Select EDF save folder')
-        if chosen == '':
-            return
-        self.experiment.ensureEyeLinkDefaults()
-        self.experiment.eyeLinkEDFDir = chosen
-        window.attributes('-topmost', True)
-        entry.delete(0, END)
-        entry.insert(0, chosen)
-
-
     def applyExperimentChanges(self):
         ''' Execute experiment changes when the apply or apply and save button is pressed'''
         self.experiment.ensureEyeLinkDefaults()
@@ -1249,7 +1238,6 @@ class Bassoon:
         self.experiment.eyeLinkIP = ipValue if ipValue != '' else '100.1.1.1'
         edfValue = self.eyeLinkEDFSelection.get().strip()
         self.experiment.eyeLinkEDF = edfValue if edfValue != '' else 'BASS.EDF'
-        self.experiment.eyeLinkEDFDir = self.eyeLinkEDFDirSelection.get().strip()
         cal_target_value = self.eyeLinkCalTargetSelection.get().strip().lower()
         self.experiment.eyeLinkCalTarget = 'fish' if cal_target_value == 'fish' else 'standard'
         try:
@@ -1317,7 +1305,6 @@ class Bassoon:
                 "eyeLinkDummy": self.eyeLinkDummySelection.get() == 1,
                 "eyeLinkIP": self.eyeLinkIPSelection.get().strip(),
                 "eyeLinkEDF": self.eyeLinkEDFSelection.get().strip(),
-                "eyeLinkEDFDir": self.eyeLinkEDFDirSelection.get().strip(),
                 "eyeLinkCalTarget": (
                     'fish' if self.eyeLinkCalTargetSelection.get().strip().lower() == 'fish' else 'standard'
                 ),
@@ -1691,6 +1678,92 @@ class Bassoon:
             self.experiment.addProtocol(protocolObject)
 
 
+    def _eyeLinkScratchPath(self):
+        '''Return the temporary EyeLink folder for this run, if it still exists.'''
+        scratch = getattr(self, '_eyeLinkScratchDir', None)
+        if not scratch:
+            return None
+        path = Path(scratch)
+        if not path.is_dir():
+            self._eyeLinkScratchDir = None
+            return None
+        return path
+
+
+    def _discardEmptyEyeLinkScratch(self):
+        '''
+        Remove the temporary EyeLink folder when it is empty.
+        Return the path when it still holds files.
+        '''
+        path = self._eyeLinkScratchPath()
+        if path is None:
+            return None
+        if any(path.iterdir()):
+            return path
+        try:
+            path.rmdir()
+        except Exception:
+            return path
+        self._eyeLinkScratchDir = None
+        if str(getattr(self.experiment, 'eyeLinkEDFDir', '')) == str(path):
+            self.experiment.eyeLinkEDFDir = ''
+        return None
+
+
+    def _reportUnsavedEyeLinkScratch(self):
+        '''Tell the user where EyeLink files are if they have not been moved yet.'''
+        path = self._discardEmptyEyeLinkScratch()
+        if path is not None:
+            print('*** EyeLink files were not moved. They remain at', path)
+
+
+    def _beginEyeLinkScratch(self):
+        '''Park this run's EyeLink and session files until the experiment is saved.'''
+        previous = self._discardEmptyEyeLinkScratch()
+        if previous is not None:
+            print('*** EyeLink files from the previous run were not saved with an experiment. They remain at', previous)
+        scratch = Path(tempfile.mkdtemp(prefix='bassoon_eyelink_'))
+        self._eyeLinkScratchDir = scratch
+        self.experiment.eyeLinkEDFDir = str(scratch)
+        if self.experiment.useEyeLink:
+            print('--> EyeLink files will be saved next to the experiment file when the run ends.')
+
+
+    def _moveEyeLinkScratchTo(self, destDir):
+        '''Move files from the temporary EyeLink folder into the experiment file's folder.'''
+        path = self._discardEmptyEyeLinkScratch()
+        if path is None:
+            return
+        destDir = Path(destDir)
+        try:
+            destDir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print('*** Could not create the experiment folder for EyeLink files (' + str(e) + '). They remain at', path)
+            return
+        leftovers = False
+        for item in list(path.iterdir()):
+            target = destDir / item.name
+            if target.exists():
+                leftovers = True
+                print('*** Left in place because the destination already has', target.name + ':', item)
+                continue
+            try:
+                shutil.move(str(item), str(target))
+                print('--> Saved', target.name, 'to', destDir)
+            except Exception as e:
+                leftovers = True
+                print('*** Could not move', item.name, '(' + str(e) + '). It remains at', item)
+        if leftovers:
+            return
+        try:
+            path.rmdir()
+        except Exception as e:
+            print('*** EyeLink files were moved, but the temporary folder could not be removed:', path, '(' + str(e) + ').')
+            return
+        self._eyeLinkScratchDir = None
+        self.experiment.eyeLinkEDFDir = ''
+
+
     def saveExperiment(self, runJustFinished=False):
         '''
         save the experiment information
@@ -1709,7 +1782,12 @@ class Bassoon:
 
         if expfname == '':
             print('--> Save was ABORTED. Try saving again from the Bassoon GUI or console. Recompile should be set to False in the options menu in order to keep current data.')
+            self._reportUnsavedEyeLinkScratch()
             return
+
+        self._moveEyeLinkScratchTo(Path(expfname).parent)
+        # Keep the temporary path out of the saved experiment.
+        self.experiment.eyeLinkEDFDir = ''
 
         # set wins to None type because they may still be running processes which will prevent pickling
         self.experiment.win = None
@@ -1778,6 +1856,7 @@ class Bassoon:
 
         self.runExperimentButton.config(state=DISABLED)
 
+        self._beginEyeLinkScratch()
         self.experiment.experimentStartTime = datetime.now()  # write down start time
         self.experiment.activate(gui_root=root)  # run the experiment
         self.experiment.experimentEndTime = datetime.now()  # write down end time
@@ -1787,6 +1866,8 @@ class Bassoon:
         '''Save results and restore the Bassoon GUI after an experiment run.'''
         try:
             print('\n--> The experiment has ended. Please save.')
+            if self._eyeLinkScratchPath() is not None:
+                print('--> EyeLink and session files from this run will be placed in the same folder.')
             # pass recompile = False becasue you want to save the experiment that you just ran, not a new one
             self.saveExperiment(runJustFinished = True) #recompileOption not passed (defaults to false, because you want to save the experiment you just ran)
 
@@ -1794,6 +1875,7 @@ class Bassoon:
             print('\n***NOTICE: THE PRECEEDING EXPERIMENT WAS NOT SAVED. MANUALLY SAVE BEFORE PROCEEDING OR THE EXPERIMENT WILL BE LOST.' +
                   '\n--> Invoke app.experiment.recompileExperiment = False; app.saveExperiment() to save the experiment.' +
                   '\n--> Alternatively, the experiment object is located at app.experiment. However, this object may not be immediately pickalable without invoking \'app.experiment.win = None\' and \'app.experiment.informationWin = None\'')
+            self._reportUnsavedEyeLinkScratch()
 
         print('\n\nBassoon is ready to play again!')
         self.runExperimentButton.config(state=NORMAL)
