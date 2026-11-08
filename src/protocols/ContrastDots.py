@@ -11,7 +11,7 @@ draws on top of neighboring dots. The subject presses space when they notice eac
 one; a short sound plays on each press.
 """
 from protocols.protocol import protocol
-from psychopy import visual, event
+from psychopy import visual, event, core
 from datetime import datetime
 from pathlib import Path
 import random, math
@@ -927,7 +927,7 @@ class ContrastDots(protocol):
         headerLines = [
             '# OKR Condition Log',
             '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
-            '# TimeBase: seconds from EyeLink SYNCTIME (sent when stimulus timing clock starts, after setup)',
+            '# TimeBase: seconds from EyeLink SYNCTIME (first fixation frame, or trial start if there is no lead-in cross)',
             '# DirectionsDeg: {dirs}'.format(dirs=directionText),
             '# MaxConsecutiveSameDirection: {n}'.format(n=int(self.maxConsecutiveSameDirection)),
             'eventIndex\teventType\tcontrastBlockIndex\tstartTime\tendTime\tdirection\tcontrastLevel\tdotColor\tusePersistentDots\tisAnchor100',
@@ -987,6 +987,22 @@ class ContrastDots(protocol):
     def _onFixationFrame(self, frameIndex, nFrames):
         '''Optional per-frame hook during fixation cross (lead-in and ITI).'''
         pass
+
+
+    def _markFixationOnset(self, trialClock):
+        '''Align protocol t=0 and EyeLink SYNCTIME with the first fixation frame.'''
+        if getattr(self, '_fixationOnsetMarked', False):
+            return
+        self._fixationOnsetMarked = True
+        sessionClock = getattr(self, '_okrSessionClock', None)
+        if sessionClock is not None:
+            self._okrProtocolSessionZero = sessionClock.getTime()
+        else:
+            self._okrProtocolSessionZero = None
+        trialClock.reset()
+        sendMessage = getattr(self, '_sendEyeLinkMessage', None)
+        if sendMessage is not None:
+            sendMessage('SYNCTIME')
 
 
     def _afterProtocolComplete(self, win):
@@ -1100,7 +1116,13 @@ class ContrastDots(protocol):
 
         self.createEpochLog()
         totalEpochs = len(self._epochLog)
-        trialClock = self._startTrialClock()
+        # With a lead-in cross, SYNCTIME is sent on the frame the cross appears.
+        self._fixationOnsetMarked = False
+        if self._tailTimeNumFrames > 0:
+            trialClock = core.Clock()
+            self._okrProtocolSessionZero = None
+        else:
+            trialClock = self._startTrialClock()
         okrEvents = []
         okrEventCounter = [0]
         self._attentionEvents = []
@@ -1125,10 +1147,14 @@ class ContrastDots(protocol):
                 for f in range(self._tailTimeNumFrames):
                     for arm in fixationCrossArms:
                         arm.draw()
+                    if f == 0:
+                        win.callOnFlip(self._markFixationOnset, trialClock)
                     win.flip()
                     self._onFixationFrame(f, self._tailTimeNumFrames)
                     if fixationStart is None:
-                        fixationStart = trialClock.getTime()
+                        if not self._fixationOnsetMarked:
+                            self._markFixationOnset(trialClock)
+                        fixationStart = 0.0
                     if self.checkQuitOrPause():
                         self._appendOkrFixation(
                             okrEvents, okrEventCounter, -1,
@@ -1362,7 +1388,12 @@ class ContrastDots(protocol):
             self._completed = 1
             self._afterProtocolComplete(win)
         finally:
-            self._teardownPerRunStimulus()
+            try:
+                self._teardownPerRunStimulus()
+            finally:
+                # Audio players and celebration clips cannot be pickled with the experiment.
+                self._attentionProbeSound = None
+                self._celebrationSoundRefs = None
             okrLogPath = self._writeOkrLogFile(okrEvents)
             if okrLogPath is not None:
                 print('--> Wrote OKR condition log for slowphase-okr:', okrLogPath)

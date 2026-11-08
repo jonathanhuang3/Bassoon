@@ -34,6 +34,7 @@ import copy
 import random
 import shutil
 import tempfile
+import traceback
 
 # Set the working directory to the directory of this script
 SRC_DIR = Path(__file__).resolve().parent
@@ -57,6 +58,62 @@ def protocolClassNameToDisplayName(pname):
                 out.append(' ')
         out.append(char)
     return ''.join(out)
+
+
+def _jsonReady(value, seen=None):
+    '''Convert experiment values into objects json.dump can write.'''
+    if seen is None:
+        seen = set()
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, int) and type(value) is not int:
+        return int(value)
+    if isinstance(value, float) and type(value) is not float:
+        return float(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, datetime):
+        return value.strftime('%D %H:%M:%S')
+    if isinstance(value, Path):
+        return str(value)
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    if np is not None and isinstance(value, np.ndarray):
+        return _jsonReady(value.tolist(), seen)
+    if np is not None and isinstance(value, np.generic):
+        return _jsonReady(value.item(), seen)
+    # Only containers still on the stack are tracked. Keeping every id would
+    # treat a later array as a repeat after an earlier temporary list was freed.
+    if isinstance(value, (dict, list, tuple)):
+        ident = id(value)
+        if ident in seen:
+            return None
+        seen.add(ident)
+        try:
+            if isinstance(value, dict):
+                return {str(key): _jsonReady(item, seen) for key, item in value.items()}
+            return [_jsonReady(item, seen) for item in value]
+        finally:
+            seen.discard(ident)
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+def _experimentForJson(experiment):
+    '''Snapshot of an experiment suitable for the MATLAB sidecar.'''
+    raw = dict(vars(experiment))
+    for name in ('_elTracker', 'win', 'informationWin', 'portObj'):
+        raw.pop(name, None)
+    protocolList = raw.get('protocolList') or []
+    raw['protocolList'] = [
+        entry[0] if isinstance(entry, (list, tuple)) and entry else str(entry)
+        for entry in protocolList
+    ]
+    return _jsonReady(raw)
 
 
 # Each protocol subclass must be imported here:
@@ -86,6 +143,10 @@ from protocols.ContrastDots import ContrastDots
 from protocols.ContrastDotsWithTunnelMask import ContrastDotsWithTunnelMask
 from protocols.ContrastDotsWithTunnelMaskThreshold import ContrastDotsWithTunnelMaskThreshold
 from protocols.ContrastDotsWithHemifieldMask import ContrastDotsWithHemifieldMask
+from protocols.ContrastDotsWithNasalStepRight import ContrastDotsWithNasalStepRight
+from protocols.ContrastDotsWithNasalStepLeft import ContrastDotsWithNasalStepLeft
+from protocols.ContrastDotsWithArcuateRight import ContrastDotsWithArcuateRight
+from protocols.ContrastDotsWithArcuateLeft import ContrastDotsWithArcuateLeft
 from protocols.CalibrationMonitor import CalibrationMonitor
 from protocols.VisualAcuityDots import VisualAcuityDots
 from protocols.CustomValidation import CustomValidation
@@ -242,7 +303,7 @@ class Bassoon:
 
         # save all available protocols
         self.protocolList = [p[:-3] for p in protocolFiles if p.endswith(
-            '.py') and p != 'protocol.py' and p != '__init__.py']
+            '.py') and p != 'protocol.py' and p != '__init__.py' and not p.startswith('_')]
         self.protocolList.sort()
         for i, pname in enumerate(self.protocolList):
             self.protocolList[i] = protocolClassNameToDisplayName(pname)
@@ -1793,8 +1854,21 @@ class Bassoon:
         self.experiment.win = None
         self.experiment.informationWin = None
         self.experiment._elTracker = None
-        with open(expfname, 'wb') as f:
-            pickle.dump(self.experiment, f)
+        self.experiment.releaseRuntimeMedia()
+        # Build the pickle fully before touching the destination, so a failure
+        # does not leave a 0-byte .experiment file.
+        try:
+            payload = pickle.dumps(self.experiment)
+        except Exception:
+            path = Path(expfname)
+            if path.is_file() and path.stat().st_size == 0:
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+            raise
+        path = Path(expfname)
+        path.write_bytes(payload)
 
         #close the serial port and remove it as a property of the experiment
         if self.experiment.ttlPortOpen:
@@ -1805,29 +1879,23 @@ class Bassoon:
             
         # save a json file as well that can be read in matlab
         jsonfname = expfname[0:-11] + '.json'
-        jsonDict = copy.deepcopy(vars(self.experiment))
-        jsonDict['protocolList'] = [p[0] for p in jsonDict['protocolList']]
-        jsonDict.pop('_elTracker', None)
-        for p in jsonDict['loggedStimuli']:
-            p.pop('_portObj', None)
-            p.pop('_elTracker', None)
-
-        
-        try:  # LOOK INTO WHY THESE COMMANDS THROW AN ERROR SOMETIMES... MIGHT HAVE TO DO WITH WHEN AN EXPERIMENT IS RELOADED AFTER BEING RUN ONCE
-            jsonDict['experimentStartTime'] = jsonDict['experimentStartTime'].strftime(
-                "%D %H:%M:%S")
-            jsonDict['experimentEndTime'] = jsonDict['experimentEndTime'].strftime(
-                "%D %H:%M:%S")
-        except:
-            pass
-        
-        with open(jsonfname, 'w') as f:
-            json.dump(jsonDict, f)
+        jsonSaved = False
+        try:
+            Path(jsonfname).write_text(
+                json.dumps(_experimentForJson(self.experiment)),
+                encoding='utf-8',
+            )
+            jsonSaved = True
+        except Exception as err:
+            print('*** The experiment file was saved, but the JSON sidecar was not (' + str(err) + ').')
 
         now = datetime.now()
         print('--> Save succesful. Time: ', now.strftime("%D %H:%M:%S"))
-        print('--> .experiment and .json files saved at ' +
-              expfname[0:-11] + '.*')
+        if jsonSaved:
+            print('--> .experiment and .json files saved at ' +
+                  expfname[0:-11] + '.*')
+        else:
+            print('--> .experiment file saved at ' + expfname)
         
         # re-establish the TTL port for the experiment
         self.experiment.establishPort(self.experiment.ttlPort, fromSave=True)
@@ -1871,7 +1939,8 @@ class Bassoon:
             # pass recompile = False becasue you want to save the experiment that you just ran, not a new one
             self.saveExperiment(runJustFinished = True) #recompileOption not passed (defaults to false, because you want to save the experiment you just ran)
 
-        except:
+        except Exception:
+            traceback.print_exc()
             print('\n***NOTICE: THE PRECEEDING EXPERIMENT WAS NOT SAVED. MANUALLY SAVE BEFORE PROCEEDING OR THE EXPERIMENT WILL BE LOST.' +
                   '\n--> Invoke app.experiment.recompileExperiment = False; app.saveExperiment() to save the experiment.' +
                   '\n--> Alternatively, the experiment object is located at app.experiment. However, this object may not be immediately pickalable without invoking \'app.experiment.win = None\' and \'app.experiment.informationWin = None\'')

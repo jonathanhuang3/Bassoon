@@ -19,7 +19,7 @@ class DirectionalDotsVRComparison(DirectionalDots):
         self.backgroundColor = [-0.91, -0.91, -0.91]
         self.numberOfDots = 25
         self.dotRadius_degrees = 2.5  # degrees - radius (diameter = 5 deg)
-        self.scotomaOn = False
+        self.scotomaOn = False 
         self.interStimulusInterval = 0.0 #seconds - no wait between epochs
         # Contrast Dots-style lifetime (fixed duration + staggered first expiry).
         self.lifetimeMode = 'stagger' # 'stagger' = fixed dotLifetime for all dots; first expiry spread by spawnStagger (Contrast Dots style). Do not use 'offset' here.

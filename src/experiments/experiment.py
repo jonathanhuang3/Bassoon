@@ -1466,10 +1466,51 @@ class experiment():
         logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
         return logPath
 
-    def _showWaitingRoom(self, protocolNumber, totalProtocols, displayName):
+    def _teardownPreparedStimulus(self, protocol):
+        '''Drop a mask or other per-run stimulus built before the protocol started.'''
+        teardown = getattr(protocol, '_teardownPerRunStimulus', None)
+        if not callable(teardown):
+            return
+        try:
+            teardown()
+        except Exception as err:
+            print('*** Could not clear the prepared stimulus (' + str(err) + ').')
+
+    def releaseRuntimeMedia(self):
+        '''
+        Drop audio players and gaze-mask textures before the experiment is pickled.
+
+        These objects hold open devices or the stimulus window. Leaving them on a
+        protocol makes pickle abort and leaves a 0-byte experiment file.
+        '''
+        names = (
+            '_attentionProbeSound',
+            '_celebrationSoundRefs',
+            '_confirmSound',
+            '_reminderJingle',
+            '_okrFixationCountdownSounds',
+            '_calClickSound',
+            '_gazeMask',
+            '_tracker',
+            '_preparedWin',
+        )
+        targets = [self]
+        for entry in list(getattr(self, 'protocolList', []) or []):
+            if isinstance(entry, (list, tuple)) and len(entry) > 1:
+                targets.append(entry[1])
+        for target in targets:
+            for name in names:
+                if hasattr(target, name):
+                    setattr(target, name, None)
+
+    def _showWaitingRoom(self, protocolNumber, totalProtocols, displayName, prepare=None):
         '''
         Admin gate between back-to-back protocols: show "Waiting Room" until Enter.
         Returns False if the administrator pressed q to abort the remaining run.
+
+        prepare, when given, runs after the waiting-room text is on screen and
+        before Enter is accepted, so slow stimulus setup does not sit between
+        the keypress and the first fixation cross.
         '''
         win = self.win
         midGray = [0.0, 0.0, 0.0]
@@ -1505,6 +1546,18 @@ class experiment():
                 n=protocolNumber, total=totalProtocols, name=displayName,
             )
         )
+        label.draw()
+        win.flip()
+        if infoLabel is not None:
+            infoLabel.draw()
+            self.informationWin.flip()
+        if prepare is not None:
+            prepare()
+            label.draw()
+            win.flip()
+            if infoLabel is not None:
+                infoLabel.draw()
+                self.informationWin.flip()
         event.clearEvents()
         while True:
             label.draw()
@@ -1538,7 +1591,27 @@ class experiment():
                     displayName = name + suffix
 
                 if getattr(self, 'waitingRoom', True):
-                    if not self._showWaitingRoom(i + 1, len(self.protocolList), displayName):
+                    protocolObject = p[1]
+                    preparedStimulus = {'done': False}
+
+                    def _prepareBeforeEnter(protocol=protocolObject, state=preparedStimulus):
+                        prepare = getattr(protocol, 'prepareBeforeWaitingRoom', None)
+                        if prepare is None:
+                            return
+                        protocol._elTracker = self._elTracker
+                        try:
+                            prepare(self.win)
+                        except Exception as err:
+                            print('*** Could not prepare the stimulus (' + str(err) + ').')
+                            self._teardownPreparedStimulus(protocol)
+                            raise
+                        state['done'] = True
+
+                    if not self._showWaitingRoom(
+                        i + 1, len(self.protocolList), displayName, prepare=_prepareBeforeEnter,
+                    ):
+                        if preparedStimulus['done']:
+                            self._teardownPreparedStimulus(protocolObject)
                         break
 
                 print('!!! Running Protocol Number ' + str(i+1) + ' of ' +  str(len(self.protocolList)) + ', with name ' + displayName)
