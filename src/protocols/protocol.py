@@ -10,6 +10,8 @@ import random, math
 import inspect
 import ast
 from functools import lru_cache
+from datetime import datetime
+from pathlib import Path
 
 
 class protocol():
@@ -241,6 +243,47 @@ class protocol():
             sendMessage('SYNCTIME')
         return trialClock
 
+    def _okrLogFilePath(self, logDir):
+        '''
+        OKR timing file for this protocol.
+
+        When this run has an EyeLink session, the name matches that protocol's
+        ASC: BASS_<session>_<n>_<Protocol_Name>_OKR.txt beside
+        BASS_<session>_<n>_<Protocol_Name>.asc.
+        '''
+        logDir = Path(logDir)
+        trial_id = getattr(self, '_okrAscTrialId', None)
+        stamp = getattr(self, '_eyeLinkSessionStamp', None)
+        edf_stem = getattr(self, '_eyeLinkEdfStem', None) or 'BASS'
+        if trial_id and stamp:
+            safe = ''.join(
+                ch if ch.isalnum() or ch in '-_.' else '_' for ch in str(trial_id)
+            ).strip('._') or 'protocol'
+            return logDir / '{stem}_{stamp}_{trial}_OKR.txt'.format(
+                stem=edf_stem, stamp=stamp, trial=safe,
+            )
+        fallback_stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        safe_name = str(getattr(self, 'protocolName', 'protocol')).replace(' ', '_')
+        return logDir / 'OKR_Log_{name}_{stamp}.txt'.format(
+            name=safe_name, stamp=fallback_stamp,
+        )
+
+
+    def _pairedEyeLinkAscName(self):
+        '''ASC filename this protocol's OKR log belongs with, or None.'''
+        trial_id = getattr(self, '_okrAscTrialId', None)
+        stamp = getattr(self, '_eyeLinkSessionStamp', None)
+        edf_stem = getattr(self, '_eyeLinkEdfStem', None) or 'BASS'
+        if not trial_id or not stamp:
+            return None
+        safe = ''.join(
+            ch if ch.isalnum() or ch in '-_.' else '_' for ch in str(trial_id)
+        ).strip('._') or 'protocol'
+        return '{stem}_{stamp}_{trial}.asc'.format(
+            stem=edf_stem, stamp=stamp, trial=safe,
+        )
+
+
     def _recordOkrSessionEvent(self, eventType, startTime, endTime, **fields):
         '''
         Append one condition interval to the experiment-wide OKR session log.
@@ -249,10 +292,10 @@ class protocol():
         sessionEvents = getattr(self, '_okrSessionEvents', None)
         sessionZero = getattr(self, '_okrProtocolSessionZero', None)
         if sessionEvents is None or sessionZero is None:
-            return
+            return None
         sessionCounter = getattr(self, '_okrSessionEventCounter', None)
         if sessionCounter is None:
-            return
+            return None
         sessionCounter[0] += 1
         row = {
             'eventIndex': sessionCounter[0],
@@ -273,7 +316,8 @@ class protocol():
             'isAnchor100': fields.get('isAnchor100', 'NA'),
         }
         sessionEvents.append(row)
-    
+        return row
+
     def showInformationText(self, stimWin, txt):
         '''
         update the information window

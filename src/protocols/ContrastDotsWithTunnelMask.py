@@ -24,13 +24,22 @@ class ContrastDotsWithTunnelMask(ContrastDots):
         self.transitionWidthDegrees = 1.0  # raised-cosine edge width in degrees (0 = hard edge)
         self.maskColor = [0.0, 0.0, 0.0]  # defaults to the gray background color
         self.persistentDots = False  # True = dots never respawn (infinite lifetime)
-        self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0]
+        self.contrasts = [1.0]
+        self.directions = [0.0, 90.0, 180.0, 270.0]  # degrees - right, up, left, down
         self.logGazeLatency = True  # True = log per-frame gaze-contingent latency to a text file
         if hasattr(self, 'tunnelEdgeSigmaDegrees'):
             delattr(self, 'tunnelEdgeSigmaDegrees')
 
     def _usePersistentDots(self):
         return bool(self.persistentDots)
+
+    def _okrExtraFields(self, blockIndex, direction=None):
+        fields = super()._okrExtraFields(blockIndex, direction)
+        if hasattr(self, 'tunnelVisibleDiameterDegrees'):
+            fields['tunnelDiameterDeg'] = '{g:g}'.format(
+                g=float(self.tunnelVisibleDiameterDegrees),
+            )
+        return fields
 
     def _stimulusTitle(self):
         return 'Contrast Dots with Tunnel Mask'
@@ -208,9 +217,10 @@ class ContrastDotsWithTunnelMask(ContrastDots):
         self._gazeMaskWarningShown = False
         self._initGazeReadCache(win)
         print(
-            '--> Contrast Dots with Tunnel Mask: tunnel diameter = {d:g}°, '
+            '--> {title}: mask diameter = {d:g}°, '
             'raised-cosine transition = {w:g}° '
             '(mask overlay {s} px, ppd_h={h:.2f} ppd_v={v:.2f}).'.format(
+                title=self._stimulusTitle(),
                 d=float(self.tunnelVisibleDiameterDegrees),
                 w=float(self.transitionWidthDegrees),
                 s=overlay_size_pix,
@@ -405,3 +415,4 @@ class ContrastDotsWithTunnelMask(ContrastDots):
         self._pendingLatency = None
         self._gazeMask = None
         self._tracker = None
+        super()._teardownPerRunStimulus()

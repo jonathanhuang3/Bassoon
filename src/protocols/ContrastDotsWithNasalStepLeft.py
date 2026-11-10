@@ -2,8 +2,9 @@
 """
 Contrast Dots with a gaze-contingent left-eye nasal step.
 
-The step is nasal to 10° (right of fixation) and sits on the horizontal
-meridian. Its upper edge rises smoothly toward the nasal periphery.
+The step runs from 10° to 30° nasal of fixation (right of gaze) and sits
+on the horizontal meridian. Its upper edge rises from 3° to 9°. It keeps
+that retinal size as the eye moves.
 Blocked Hemifield chooses superior ('upper') or inferior ('lower').
 """
 from protocols._fieldDefectMask import NasalStepMask

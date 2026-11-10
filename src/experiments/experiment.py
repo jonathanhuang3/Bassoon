@@ -706,7 +706,87 @@ class experiment():
         return asc_path
 
 
-    def _updateEyeLinkCalibrationJsonAscPath(self, asc_path):
+    _ASC_TRIAL_START_RE = re.compile(r'^MSG\s+\d+\s+TRIALID\s+(\S+)')
+    _ASC_TRIAL_END_RE = re.compile(r'^MSG\s+\d+\s+TRIAL_RESULT\b')
+    _ASC_DATA_PREFIXES = (
+        'MSG', 'START', 'END', 'SFIX', 'EFIX', 'SSACC', 'ESACC',
+        'SBLINK', 'EBLINK', 'INPUT', 'BUTTON',
+    )
+
+
+    @classmethod
+    def _ascLineIsData(cls, line):
+        '''True for a sample or event line, after the ASC preamble.'''
+        stripped = line.lstrip()
+        if stripped[:1].isdigit():
+            return True
+        return stripped.startswith(cls._ASC_DATA_PREFIXES)
+
+
+    def _protocolAscPath(self, asc_path, trial_id, used_names):
+        '''Local ASC name for one protocol: session name plus the TRIALID token.'''
+        safe = ''.join(ch if ch.isalnum() or ch in '-_.' else '_' for ch in str(trial_id))
+        safe = safe.strip('._') or 'protocol'
+        stem = Path(asc_path).stem + '_' + safe
+        name = stem
+        suffix_n = 2
+        while name.lower() in used_names:
+            name = '{stem}_{n}'.format(stem=stem, n=suffix_n)
+            suffix_n += 1
+        used_names.add(name.lower())
+        return Path(asc_path).with_name(name + '.asc')
+
+
+    def _splitEyeLinkAscByProtocol(self, asc_path):
+        '''
+        Write one ASC per protocol from the session ASC.
+
+        Each file is the shared preamble plus the lines from that protocol's
+        TRIALID through its TRIAL_RESULT. The full session ASC is left in place.
+        '''
+        asc_path = Path(asc_path)
+        if not asc_path.is_file():
+            return []
+
+        preamble = []
+        protocol_paths = []
+        used_names = set()
+        out = None
+        try:
+            with open(asc_path, 'r', encoding='latin-1', newline='') as src:
+                in_preamble = True
+                for line in src:
+                    if in_preamble and not self._ascLineIsData(line):
+                        preamble.append(line)
+                        continue
+                    in_preamble = False
+                    start = self._ASC_TRIAL_START_RE.match(line.lstrip())
+                    if start:
+                        if out is not None:
+                            out.close()
+                            out = None
+                        dest = self._protocolAscPath(asc_path, start.group(1), used_names)
+                        out = open(dest, 'w', encoding='latin-1', newline='')
+                        out.writelines(preamble)
+                        protocol_paths.append(dest)
+                    if out is not None:
+                        out.write(line)
+                        if self._ASC_TRIAL_END_RE.match(line.lstrip()):
+                            out.close()
+                            out = None
+        finally:
+            if out is not None:
+                out.close()
+
+        if not protocol_paths:
+            print('*** Session ASC has no TRIALID markers, so it was not split by protocol.')
+            return []
+        for path in protocol_paths:
+            print('--> Wrote protocol ASC to', path)
+        return protocol_paths
+
+
+    def _updateEyeLinkCalibrationJsonAscPath(self, asc_path, protocol_asc_paths=None):
         if not self._eyeLinkCalibrationJsonPath:
             return
 
@@ -718,6 +798,8 @@ class experiment():
             with open(json_path, 'r', encoding='utf-8') as f:
                 record = json.load(f)
             record['localAscFile'] = Path(asc_path).name
+            if protocol_asc_paths:
+                record['protocolAscFiles'] = [Path(path).name for path in protocol_asc_paths]
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(record, f, indent=2)
         except Exception as e:
@@ -1300,7 +1382,12 @@ class experiment():
                     self._updateEyeLinkCalibrationJsonFromEdf(localName)
                     asc_path = self._convertEyeLinkEdfToAsc(localName)
                     if asc_path is not None:
-                        self._updateEyeLinkCalibrationJsonAscPath(asc_path)
+                        try:
+                            protocol_ascs = self._splitEyeLinkAscByProtocol(asc_path)
+                        except Exception as split_err:
+                            protocol_ascs = []
+                            print('*** Could not split the ASC by protocol (' + str(split_err) + ').')
+                        self._updateEyeLinkCalibrationJsonAscPath(asc_path, protocol_ascs)
                 except Exception as e:
                     print('*** EyeLink recording finished, but the EDF could not be downloaded (' + str(e) + '). Copy it from the Host PC if needed.')
             try:
@@ -1441,6 +1528,7 @@ class experiment():
             '# StimulusNames: {names}'.format(names=', '.join(protocolNames)),
             '# TimeBase: seconds from SESSION_SYNCTIME (sent when the multi-stimulus run timing clock starts)',
             '# Note: protocolStartTime/protocolEndTime are seconds from each protocol SYNCTIME; startTime/endTime are continuous across the run',
+            '# AttentionProbe: startTime is when the red dot appeared, endTime is when it turned off; sweep is the probe number in that block',
             'eventIndex\tprotocolIndex\tprotocolName\teventType\tstartTime\tendTime\tprotocolStartTime\tprotocolEndTime\tdirection\tcontrastLevel\tlogMAR\tblockOrEpochIndex\tsweep\tdotColor\tusePersistentDots\tisAnchor100',
         ]
         rowLines = []
@@ -1493,6 +1581,8 @@ class experiment():
             '_gazeMask',
             '_tracker',
             '_preparedWin',
+            '_prebuiltDots',
+            '_prebuiltFixationCrossArms',
         )
         targets = [self]
         for entry in list(getattr(self, 'protocolList', []) or []):
@@ -1503,14 +1593,13 @@ class experiment():
                 if hasattr(target, name):
                     setattr(target, name, None)
 
-    def _showWaitingRoom(self, protocolNumber, totalProtocols, displayName, prepare=None):
+    def _showWaitingRoom(self, protocolNumber, totalProtocols, displayName):
         '''
-        Admin gate between back-to-back protocols: show "Waiting Room" until Enter.
+        Admin gate between back-to-back protocols: show "Starting Soon..." until Enter.
         Returns False if the administrator pressed q to abort the remaining run.
 
-        prepare, when given, runs after the waiting-room text is on screen and
-        before Enter is accepted, so slow stimulus setup does not sit between
-        the keypress and the first fixation cross.
+        Stimulus upload happens before this text is shown, so Enter flips
+        straight to the first fixation cross.
         '''
         win = self.win
         midGray = [0.0, 0.0, 0.0]
@@ -1519,26 +1608,36 @@ class experiment():
         win.flip()
         win.flip()
 
-        waitingText = 'Waiting Room\n\nPress Enter to Start'
-        label = visual.TextStim(
-            win=win,
-            text=waitingText,
-            color=black,
-            units='pix',
-            height=48,
-            wrapWidth=win.size[0] * 0.9,
-        )
-        infoLabel = None
-        if self.useInformationMonitor and getattr(self, 'informationWin', None) is not None:
-            self.informationWin.color = midGray
-            infoLabel = visual.TextStim(
-                win=self.informationWin,
-                text=waitingText,
+        def _waitingLabels(targetWin):
+            titleHeight = max(72.0, min(160.0, float(targetWin.size[1]) * 0.09))
+            nameHeight = titleHeight * 0.38
+            title = visual.TextStim(
+                win=targetWin,
+                text='Starting Soon...',
                 color=black,
                 units='pix',
-                height=48,
-                wrapWidth=self.informationWin.size[0] * 0.9,
+                height=titleHeight,
+                bold=True,
+                wrapWidth=targetWin.size[0] * 0.9,
+                pos=(0, titleHeight * 0.55),
             )
+            name = visual.TextStim(
+                win=targetWin,
+                text=displayName,
+                color=black,
+                units='pix',
+                height=nameHeight,
+                wrapWidth=targetWin.size[0] * 0.9,
+                pos=(0, -titleHeight * 0.85),
+            )
+            return title, name
+
+        titleLabel, nameLabel = _waitingLabels(win)
+        infoTitle = None
+        infoName = None
+        if self.useInformationMonitor and getattr(self, 'informationWin', None) is not None:
+            self.informationWin.color = midGray
+            infoTitle, infoName = _waitingLabels(self.informationWin)
 
         print(
             '!!! Waiting Room — press Enter to begin protocol {n} of {total} ({name}); '
@@ -1546,24 +1645,21 @@ class experiment():
                 n=protocolNumber, total=totalProtocols, name=displayName,
             )
         )
-        label.draw()
+        titleLabel.draw()
+        nameLabel.draw()
         win.flip()
-        if infoLabel is not None:
-            infoLabel.draw()
+        if infoTitle is not None:
+            infoTitle.draw()
+            infoName.draw()
             self.informationWin.flip()
-        if prepare is not None:
-            prepare()
-            label.draw()
-            win.flip()
-            if infoLabel is not None:
-                infoLabel.draw()
-                self.informationWin.flip()
         event.clearEvents()
         while True:
-            label.draw()
+            titleLabel.draw()
+            nameLabel.draw()
             win.flip()
-            if infoLabel is not None:
-                infoLabel.draw()
+            if infoTitle is not None:
+                infoTitle.draw()
+                infoName.draw()
                 self.informationWin.flip()
             keys = event.getKeys(keyList=['return', 'enter', 'q'])
             if not keys:
@@ -1593,22 +1689,24 @@ class experiment():
                 if getattr(self, 'waitingRoom', True):
                     protocolObject = p[1]
                     preparedStimulus = {'done': False}
-
-                    def _prepareBeforeEnter(protocol=protocolObject, state=preparedStimulus):
-                        prepare = getattr(protocol, 'prepareBeforeWaitingRoom', None)
-                        if prepare is None:
-                            return
-                        protocol._elTracker = self._elTracker
+                    prepare = getattr(protocolObject, 'prepareBeforeWaitingRoom', None)
+                    if prepare is not None:
+                        protocolObject._elTracker = self._elTracker
+                        # Gray screen while the mask, dots, and cross upload.
+                        # The waiting-room text appears only after that finishes.
+                        self.win.color = [0.0, 0.0, 0.0]
+                        self.win.flip()
+                        self.win.flip()
                         try:
                             prepare(self.win)
                         except Exception as err:
                             print('*** Could not prepare the stimulus (' + str(err) + ').')
-                            self._teardownPreparedStimulus(protocol)
+                            self._teardownPreparedStimulus(protocolObject)
                             raise
-                        state['done'] = True
+                        preparedStimulus['done'] = True
 
                     if not self._showWaitingRoom(
-                        i + 1, len(self.protocolList), displayName, prepare=_prepareBeforeEnter,
+                        i + 1, len(self.protocolList), displayName,
                     ):
                         if preparedStimulus['done']:
                             self._teardownPreparedStimulus(protocolObject)
@@ -1664,8 +1762,11 @@ class experiment():
                 p._eyeLinkCalibrationAreaProportion = self.eyeLinkCalibrationAreaProportion
                 p._eyeLinkValidationAreaDegrees = self.eyeLinkValidationAreaDegrees
                 p._eyeLinkCalibrationAreaDegrees = self.eyeLinkCalibrationAreaDegrees
+                safeName = displayName.replace(' ', '_')
+                p._okrAscTrialId = '{n}_{name}'.format(n=i + 1, name=safeName)
+                p._eyeLinkSessionStamp = getattr(self, '_eyeLinkSessionStamp', None)
+                p._eyeLinkEdfStem = Path(getattr(self, 'eyeLinkEDF', 'BASS.EDF')).stem or 'BASS'
                 if self._elTracker is not None:
-                    safeName = displayName.replace(' ', '_')
                     self.sendEyeLinkMessage('TRIALID {n}_{name}'.format(n=i + 1, name=safeName))
                     self.sendEyeLinkMessage('!V TRIAL_VAR protocol {name}'.format(name=str(name).replace(' ', '_')))
                     self.sendEyeLinkMessage('!V TRIAL_VAR suffix {suf}'.format(suf=str(suffix).replace(' ', '_')))
@@ -1695,6 +1796,9 @@ class experiment():
                 protocolProperties.pop('_okrSessionEventCounter', None)
                 protocolProperties.pop('_okrSessionProtocolIndex', None)
                 protocolProperties.pop('_okrProtocolSessionZero', None)
+                protocolProperties.pop('_okrAscTrialId', None)
+                protocolProperties.pop('_eyeLinkSessionStamp', None)
+                protocolProperties.pop('_eyeLinkEdfStem', None)
                 protocolProperties.pop('_eyeLinkValidationAreaProportion', None)
                 protocolProperties.pop('_eyeLinkCalibrationAreaProportion', None)
                 protocolProperties.pop('_eyeLinkValidationAreaDegrees', None)

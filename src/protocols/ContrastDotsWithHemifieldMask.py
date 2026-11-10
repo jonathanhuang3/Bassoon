@@ -30,7 +30,7 @@ class ContrastDotsWithHemifieldMask(ContrastDotsWithTunnelMask):
         self.transitionWidthDegrees = 1.0
         self.maskColor = [0.0, 0.0, 0.0]
         self.persistentDots = False
-        self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0]
+        self.contrasts = [1.0]
 
     def _stripLegacyTunnelParams(self):
         '''Remove tunnel fields so they do not appear in Edit / saved sketches.'''

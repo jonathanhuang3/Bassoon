@@ -40,12 +40,12 @@ class ContrastDots(protocol):
         # Dot parameters
         self.numberOfDots = 200 #number of dots displayed at once
         self.dotColor = [1.0, 1.0, 1.0] #white dots at full contrast (in RGB, -1 to 1)
-        self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0] #list of contrast levels from -1 to 1. Total epochs = len(contrasts) * len(directions) * stimulusReps
+        self.contrasts = [1.0] #list of contrast levels from -1 to 1. Total epochs = len(contrasts) * len(directions) * stimulusReps
         self.dotSizeDegrees = 1.0 #degrees - dot diameter
         self.dotLifetime = 0.15 #seconds - how long each dot stays visible before respawning; also the attention-probe flash duration
         self.spawnStagger = 0.15 #seconds - max random delay before each dot's first lifetime expiry (spreads respawns across time)
         self.direction = 90.0 #degrees - legacy single direction; ignored when directions has more than one entry
-        self.directions = [90.0, 270.0] #degrees - motion directions per block (90 up, 270 down)
+        self.directions = [0.0, 90.0, 180.0, 270.0] #degrees - right, up, left, down
         self.maxConsecutiveSameDirection = 3 #maximum blocks in a row with the same direction before forcing a switch
         self.speed = 10.0 #degrees per second
 
@@ -252,10 +252,13 @@ class ContrastDots(protocol):
 
     def _initAttentionProbeSound(self):
         '''Preload positive arcade-UI reward SFX (fallback: short synthetic ding).'''
-        self._attentionProbeSound = None
         if not getattr(self, 'attentionProbe', False):
+            self._attentionProbeSound = None
             return
         if not getattr(self, 'attentionProbeSound', True):
+            self._attentionProbeSound = None
+            return
+        if getattr(self, '_attentionProbeSound', None) is not None:
             return
         try:
             from psychopy import sound
@@ -456,6 +459,13 @@ class ContrastDots(protocol):
             'pressCount': 'NA',
             'responseIndex': 'NA',
         })
+        if getattr(self, '_openOkrProbeEvent', None) is not None:
+            self._closeOkrAttentionProbe(spawnTime)
+        self._appendOkrAttentionProbe(
+            getattr(self, '_okrEvents', None),
+            getattr(self, '_okrEventCounter', None),
+            blockIndex, contrast, probeNumber, spawnTime,
+        )
         self._sendOkrEyeLinkMessage(
             'OKR AttentionProbeSpawn B{bi} P{pn} contrast {c:g} t={t:.3f}'.format(
                 bi=blockIndex, pn=probeNumber, c=contrast, t=spawnTime,
@@ -467,6 +477,7 @@ class ContrastDots(protocol):
         '''End the red flash only; response window may stay open a bit longer.'''
         if not getattr(self, '_probeActive', False):
             return
+        self._closeOkrAttentionProbe(trialClock.getTime())
         if probeIndex is not None:
             xPix, yPix = self.dotCoords[probeIndex]
             self._probeLastXPix = xPix
@@ -815,13 +826,129 @@ class ContrastDots(protocol):
             sendMessage(text)
 
 
+    def _okrEpoch(self, blockIndex):
+        try:
+            idx = int(blockIndex)
+        except (TypeError, ValueError):
+            return None
+        epochLog = getattr(self, '_epochLog', None)
+        if epochLog is None or idx < 0 or idx >= len(epochLog):
+            return None
+        return epochLog[idx]
+
+
+    def _okrDirectionDeg(self, blockIndex, direction=None):
+        if direction is None:
+            epoch = self._okrEpoch(blockIndex)
+            if epoch is not None:
+                direction = epoch.get('direction')
+        try:
+            return '{g:g}'.format(g=float(direction))
+        except (TypeError, ValueError):
+            return 'NA'
+
+
+    def _okrConditionText(self, blockIndex, direction=None):
+        '''One line naming the variables this trial actually ran.'''
+        try:
+            if int(blockIndex) < 0:
+                return 'lead-in fixation'
+        except (TypeError, ValueError):
+            return 'NA'
+        epoch = self._okrEpoch(blockIndex)
+        if epoch is None:
+            return 'NA'
+        shown = self._epochContrastDisplay(epoch)
+        try:
+            shown = 'contrast {g:g}'.format(g=float(shown))
+        except (TypeError, ValueError):
+            shown = str(shown).replace('\t', ' ').replace('\n', ' ')
+        if direction is None:
+            direction = epoch.get('direction')
+        parts = []
+        try:
+            parts.append('direction {g:g} deg ({label})'.format(
+                g=float(direction),
+                label=self._directionLabel(direction),
+            ))
+        except (TypeError, ValueError):
+            pass
+        if hasattr(self, 'blockedHemifield'):
+            parts.append('{side} hemifield'.format(
+                side=str(self.blockedHemifield).strip().lower(),
+            ))
+            parts.append('{eye} eye'.format(eye=str(self.eye).strip().lower()))
+        if (
+            hasattr(self, 'tunnelVisibleDiameterDegrees')
+            and not epoch.get('ramp')
+        ):
+            parts.append('tunnel diameter {g:g} deg'.format(
+                g=float(self.tunnelVisibleDiameterDegrees),
+            ))
+        parts.append(shown)
+        if 'baseDirection' in epoch:
+            parts.append('base {g:g} deg'.format(g=float(epoch['baseDirection'])))
+        if 'directionOffset' in epoch:
+            parts.append('offset {o:+g} deg'.format(o=float(epoch['directionOffset'])))
+        parts.append('speed {g:g} deg/s'.format(g=float(self.speed)))
+        if self._usePersistentDots():
+            parts.append('persistent dots')
+        if getattr(self, 'attentionProbe', False):
+            parts.append('{n} probes'.format(n=int(self.attentionProbeCount)))
+        return '; '.join(parts)
+
+
+    def _okrDirectionLabel(self, blockIndex, direction=None):
+        if direction is None:
+            epoch = self._okrEpoch(blockIndex)
+            if epoch is not None:
+                direction = epoch.get('direction')
+        if direction is None:
+            return 'NA'
+        return self._directionLabel(direction)
+
+
+    def _okrExtraFields(self, blockIndex, direction=None):
+        return {
+            'hemifield': 'NA',
+            'tunnelDiameterDeg': 'NA',
+        }
+
+
+    def _okrTrialFields(self, blockIndex, direction=None):
+        fields = {
+            'directionDeg': self._okrDirectionDeg(blockIndex, direction),
+            'condition': self._okrConditionText(blockIndex, direction),
+        }
+        fields.update(self._okrExtraFields(blockIndex, direction))
+        return fields
+
+
+    def _stampOkrTrialDirection(self, row, blockIndex, direction=None):
+        '''Fill the direction column for fixation, probes, and the gray blank.'''
+        label = self._okrDirectionLabel(blockIndex, direction)
+        if label != 'NA':
+            row['direction'] = label
+
+
+    def _onOkrMotionSample(self, trialClock, blockIndex, direction):
+        '''Optional per-frame OKR note during motion (tunnel diameter steps).'''
+        pass
+
+
+    def _closeOkrMotionAnnotations(self, endTime):
+        '''Close any open per-frame OKR interval at the end of motion.'''
+        pass
+
+
     def _appendOkrContrastBlock(self, events, counter, blockIndex, contrast, direction, startTime, endTime,
                                 baseDirection=None, directionOffset=None):
+        self._closeOkrMotionAnnotations(endTime)
         eventIndex = self._nextOkrEventIndex(counter)
         directionLabel = self._directionLabel(direction)
         dotColor = self._dotColorLabel()
         isAnchor100 = 1 if contrast >= 1.0 or contrast <= -1.0 else 0
-        events.append({
+        row = {
             'eventIndex': eventIndex,
             'eventType': 'ContrastBlock',
             'contrastBlockIndex': blockIndex,
@@ -832,7 +959,9 @@ class ContrastDots(protocol):
             'dotColor': dotColor,
             'usePersistentDots': int(self._usePersistentDots()),
             'isAnchor100': isAnchor100,
-        })
+        }
+        row.update(self._okrTrialFields(blockIndex, direction))
+        events.append(row)
         self._recordOkrSessionEvent(
             'ContrastBlock', startTime, endTime,
             direction=directionLabel,
@@ -869,6 +998,8 @@ class ContrastDots(protocol):
             'usePersistentDots': 'NA',
             'isAnchor100': 'NA',
         })
+        events[-1].update(self._okrTrialFields(blockIndex))
+        self._stampOkrTrialDirection(events[-1], blockIndex)
         self._recordOkrSessionEvent(
             'Afternystagmus', startTime, endTime,
             blockOrEpochIndex=blockIndex,
@@ -894,6 +1025,8 @@ class ContrastDots(protocol):
             'usePersistentDots': 'NA',
             'isAnchor100': 'NA',
         })
+        events[-1].update(self._okrTrialFields(blockIndex))
+        self._stampOkrTrialDirection(events[-1], blockIndex)
         self._recordOkrSessionEvent(
             'FixationITI', startTime, endTime,
             blockOrEpochIndex=blockIndex,
@@ -909,6 +1042,55 @@ class ContrastDots(protocol):
         self._sendOkrEyeLinkMessage(msg)
 
 
+    def _appendOkrAttentionProbe(
+        self, events, counter, blockIndex, contrast, probeNumber, startTime,
+    ):
+        '''Record one red attention dot in the OKR log. endTime is filled when it turns off.'''
+        if events is None or counter is None:
+            return
+        eventIndex = self._nextOkrEventIndex(counter)
+        row = {
+            'eventIndex': eventIndex,
+            'eventType': 'AttentionProbe',
+            'contrastBlockIndex': blockIndex,
+            'startTime': startTime,
+            'endTime': startTime,
+            'direction': 'NA',
+            'contrastLevel': contrast,
+            'dotColor': 'Red',
+            'usePersistentDots': 'NA',
+            'isAnchor100': 'NA',
+            'probeNumber': probeNumber,
+        }
+        row.update(self._okrTrialFields(blockIndex))
+        self._stampOkrTrialDirection(row, blockIndex)
+        events.append(row)
+        sessionRow = self._recordOkrSessionEvent(
+            'AttentionProbe', startTime, startTime,
+            contrastLevel=contrast,
+            blockOrEpochIndex=blockIndex,
+            sweep=probeNumber,
+            dotColor='Red',
+        )
+        self._openOkrProbeEvent = row
+        self._openOkrProbeSessionEvent = sessionRow
+
+
+    def _closeOkrAttentionProbe(self, endTime):
+        '''Set the open attention-probe row to the time the red dot turned off.'''
+        row = getattr(self, '_openOkrProbeEvent', None)
+        if row is not None:
+            row['endTime'] = endTime
+        sessionRow = getattr(self, '_openOkrProbeSessionEvent', None)
+        if sessionRow is not None:
+            sessionRow['protocolEndTime'] = endTime
+            sessionZero = getattr(self, '_okrProtocolSessionZero', None)
+            if sessionZero is not None:
+                sessionRow['endTime'] = sessionZero + endTime
+        self._openOkrProbeEvent = None
+        self._openOkrProbeSessionEvent = None
+
+
     def _writeOkrLogFile(self, events):
         if not events:
             return None
@@ -918,19 +1100,49 @@ class ContrastDots(protocol):
         else:
             logDir = Path(logDir)
         logDir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        logPath = logDir / ('OKR_Log_{name}_{stamp}.txt'.format(
-            name=self.protocolName, stamp=stamp,
-        ))
+        logPath = self._okrLogFilePath(logDir)
         directionPool = self._directionPool()
         directionText = ', '.join('{g:g}'.format(g=d) for d in directionPool)
+        pairedAsc = self._pairedEyeLinkAscName()
         headerLines = [
             '# OKR Condition Log',
             '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
-            '# TimeBase: seconds from EyeLink SYNCTIME (first fixation frame, or trial start if there is no lead-in cross)',
+        ]
+        if pairedAsc:
+            headerLines.append('# PairedEyeLinkAsc: {name}'.format(name=pairedAsc))
+        contrastText = ', '.join('{g:g}'.format(g=float(c)) for c in self.contrasts)
+        headerLines += [
+            '# RecordingStarts: first fixation frame after Enter (EyeLink SYNCTIME). Waiting-room time is not in this file.',
+            '# TimeBase: seconds from that frame. If tailTime is 0, t=0 is the start of the first dots trial, still after Enter.',
             '# DirectionsDeg: {dirs}'.format(dirs=directionText),
+            '# Contrasts: {values}'.format(values=contrastText),
+            '# SpeedDegPerSec: {v:g}'.format(v=float(self.speed)),
+            '# StimTimeSec: {v:g}'.format(v=float(self.stimTime)),
+            '# PreTimeSec: {v:g}'.format(v=float(self.preTime)),
+            '# PostStimTimeSec: {v:g}'.format(v=float(getattr(self, 'postStimTime', 0.0))),
+            '# TailTimeSec: {v:g}'.format(v=float(self.tailTime)),
+            '# InterStimulusIntervalSec: {v:g}'.format(v=float(self.interStimulusInterval)),
+            '# DotCount: {n}'.format(n=int(self.numberOfDots)),
+            '# DotSizeDeg: {v:g}'.format(v=float(self.dotSizeDegrees)),
+            '# DotLifetimeSec: {v:g}'.format(v=float(self.dotLifetime)),
+            '# SpawnStaggerSec: {v:g}'.format(v=float(self.spawnStagger)),
+            '# PersistentDots: {v}'.format(v=int(self._usePersistentDots())),
             '# MaxConsecutiveSameDirection: {n}'.format(n=int(self.maxConsecutiveSameDirection)),
-            'eventIndex\teventType\tcontrastBlockIndex\tstartTime\tendTime\tdirection\tcontrastLevel\tdotColor\tusePersistentDots\tisAnchor100',
+            '# AttentionProbeEnabled: {v}'.format(v=int(bool(getattr(self, 'attentionProbe', False)))),
+            '# AttentionProbeCount: {n}'.format(n=int(getattr(self, 'attentionProbeCount', 0))),
+            '# AttentionProbeDiameterDeg: {v:g}'.format(v=float(getattr(self, 'attentionProbeDiameterDegrees', 0.0))),
+            '# AttentionProbeSizeDeg: {v:g}'.format(v=float(self._attentionProbeSizeDegrees())),
+            '# AttentionProbeResponseWindowSec: {v:g}'.format(
+                v=float(getattr(self, 'attentionProbeResponseWindowSec', 1.0)),
+            ),
+            '# RandomSeed: {v}'.format(v=self.randomSeed),
+            '# FrameRateHz: {v}'.format(v=getattr(self, '_FR', 'NA')),
+            '# AttentionProbe: startTime is when the red dot appeared, endTime is when it turned off',
+            '# direction is the motion direction of that trial (Right, Up, Left, Down). directionDeg is the angle.',
+            '# hemifield is upper or lower for nasal-step and arcuate trials.',
+            '# tunnelDiameterDeg is the clear-aperture diameter in degrees. On TunnelDiameter rows it is the size on screen for that time range.',
+            '# condition names the variables for that trial.',
+            'eventIndex\teventType\tcontrastBlockIndex\tstartTime\tendTime\tdirection\tcontrastLevel\tdotColor\tusePersistentDots\tisAnchor100\tprobeNumber\tdirectionDeg\themifield\ttunnelDiameterDeg\tcondition',
         ]
         rowLines = []
         for event in events:
@@ -945,6 +1157,11 @@ class ContrastDots(protocol):
                 str(event['dotColor']),
                 str(event['usePersistentDots']),
                 str(event['isAnchor100']),
+                str(event.get('probeNumber', 'NA')),
+                str(event.get('directionDeg', 'NA')),
+                str(event.get('hemifield', 'NA')),
+                str(event.get('tunnelDiameterDeg', 'NA')),
+                str(event.get('condition', 'NA')),
             ]))
         logPath.write_text('\n'.join(headerLines + rowLines) + '\n', encoding='utf-8')
         return logPath
@@ -1028,29 +1245,126 @@ class ContrastDots(protocol):
 
     def _teardownPerRunStimulus(self):
         '''Optional per-run cleanup hook for subclasses.'''
-        pass
+        self._clearPrebuiltPresentation()
 
 
-    def run(self, win, informationWin):
-        self._completed = 0
-        self._informationWin = informationWin
+    def _presentationIsReady(self, win):
+        return (
+            getattr(self, '_prebuiltDots', None) is not None
+            and getattr(self, '_prebuiltFixationCrossArms', None) is not None
+            and getattr(self, '_prebuiltWin', None) is win
+            and getattr(self, '_prebuiltWinSize', None) == self._winSizeKey(win)
+        )
+
+
+    def _clearPrebuiltPresentation(self):
+        self._prebuiltDots = None
+        self._prebuiltFixationCrossArms = None
+        self._prebuiltWin = None
+        self._prebuiltWinSize = None
+
+
+    def prepareBeforeWaitingRoom(self, win):
+        '''Upload the dot field, fixation cross, and probe sound before Enter.'''
+        print('--> Preparing the dot field and fixation cross before the trial starts.')
+        self._preparePresentation(win)
+
+
+    def _preparePresentation(self, win):
+        '''
+        Create the stimuli that otherwise hitch between Enter and the first cross.
+
+        Shader upload and the probe sound happen here. When this runs from the
+        waiting room, Enter can flip straight to the fixation cross.
+        '''
         self.getFR(win)
-
         if not hasattr(self, 'postStimTime'):
             self.postStimTime = 0.0
-
         self._interStimulusIntervalNumFrames = round(self._FR * self.interStimulusInterval)
         self._actualInterStimulusInterval = self._interStimulusIntervalNumFrames * (1 / self._FR)
         self._postStimTimeNumFrames = round(self._FR * self.postStimTime)
         self._actualPostStimTime = self._postStimTimeNumFrames * (1 / self._FR)
 
+        ppd_h, ppd_v, dotDiameterPix, _probeDiameterPix, _dotRadiusPix = (
+            self._stimulusScaleFromWin(win)
+        )
+        self._initPerRunStimulus(win, (ppd_h, ppd_v))
+        self._initAttentionProbeSound()
+        if self._presentationIsReady(win):
+            return
+
+        self.dotCoords = np.zeros((self.numberOfDots, 2))
+        self._prebuiltDots = visual.ElementArrayStim(
+            win,
+            units='pix',
+            nElements=self.numberOfDots,
+            elementMask='circle',
+            elementTex=None,
+            xys=self.dotCoords.tolist(),
+            sizes=dotDiameterPix,
+            colors=self.dotColor,
+        )
+        crossHalfX = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_h
+        crossHalfY = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_v
+        crossLineWidth = max(2.0, min(crossHalfX, crossHalfY) * 2.0 * 0.15)
+        self._prebuiltFixationCrossArms = (
+            visual.ShapeStim(
+                win,
+                units='pix',
+                vertices=((-crossHalfX, 0.0), (crossHalfX, 0.0)),
+                lineWidth=crossLineWidth,
+                closeShape=False,
+                lineColor=self.fixationCrossColor,
+            ),
+            visual.ShapeStim(
+                win,
+                units='pix',
+                vertices=((0.0, -crossHalfY), (0.0, crossHalfY)),
+                lineWidth=crossLineWidth,
+                closeShape=False,
+                lineColor=self.fixationCrossColor,
+            ),
+        )
+        self._prebuiltWin = win
+        self._prebuiltWinSize = self._winSizeKey(win)
+        self._warmupPresentation(win)
+
+
+    def _warmupPresentation(self, win):
+        '''Draw once so the graphics driver compiles the stimuli, then cover them.'''
+        try:
+            self._prebuiltDots.draw()
+            mask = getattr(self, '_gazeMask', None)
+            if mask is not None:
+                mask.draw()
+            for arm in self._prebuiltFixationCrossArms:
+                arm.draw()
+        except Exception as err:
+            print('*** Could not pre-draw the stimulus (' + str(err) + ').')
+        try:
+            visual.Rect(
+                win,
+                width=float(win.size[0]) + 4.0,
+                height=float(win.size[1]) + 4.0,
+                units='pix',
+                pos=(0.0, 0.0),
+                fillColor=self.backgroundColor,
+                lineColor=None,
+            ).draw()
+        except Exception:
+            if hasattr(win, 'clearBuffer'):
+                win.clearBuffer()
+
+
+    def run(self, win, informationWin):
+        self._completed = 0
+        self._informationWin = informationWin
+        self._preparePresentation(win)
+
         random.seed(self.randomSeed)
         ppd_h, ppd_v, dotDiameterPix, probeDiameterPix, dotRadiusPix = (
             self._stimulusScaleFromWin(win)
         )
-
-        self._initPerRunStimulus(win, (ppd_h, ppd_v))
-        self._initAttentionProbeSound()
 
         if self.userInitiated:
             probeHint = ''
@@ -1073,46 +1387,15 @@ class ContrastDots(protocol):
             event.waitKeys()
 
         win.color = self.backgroundColor
-        win.flip()
-        win.flip()
+        # A lead-in cross replaces the waiting room on the next flip. Without
+        # one, two gray flips clear the previous screen before the dots.
+        if self._tailTimeNumFrames <= 0:
+            win.flip()
+            win.flip()
 
         dotLifetimeFrames = round(self._FR * self.dotLifetime)
-
-        self.dotCoords = np.zeros((self.numberOfDots, 2))
-
-        dots = visual.ElementArrayStim(
-            win,
-            units='pix',
-            nElements=self.numberOfDots,
-            elementMask='circle',
-            elementTex=None,
-            xys=self.dotCoords.tolist(),
-            sizes=dotDiameterPix,
-            colors=self.dotColor,
-        )
-
-        # ShapeStim arms: horizontal span uses ppd_h, vertical uses ppd_v.
-        crossHalfX = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_h
-        crossHalfY = 0.5 * float(self.fixationCrossSizeDegrees) * ppd_v
-        crossLineWidth = max(2.0, min(crossHalfX, crossHalfY) * 2.0 * 0.15)
-        fixationCrossArms = (
-            visual.ShapeStim(
-                win,
-                units='pix',
-                vertices=((-crossHalfX, 0.0), (crossHalfX, 0.0)),
-                lineWidth=crossLineWidth,
-                closeShape=False,
-                lineColor=self.fixationCrossColor,
-            ),
-            visual.ShapeStim(
-                win,
-                units='pix',
-                vertices=((0.0, -crossHalfY), (0.0, crossHalfY)),
-                lineWidth=crossLineWidth,
-                closeShape=False,
-                lineColor=self.fixationCrossColor,
-            ),
-        )
+        dots = self._prebuiltDots
+        fixationCrossArms = self._prebuiltFixationCrossArms
 
         self.createEpochLog()
         totalEpochs = len(self._epochLog)
@@ -1125,6 +1408,10 @@ class ContrastDots(protocol):
             trialClock = self._startTrialClock()
         okrEvents = []
         okrEventCounter = [0]
+        self._okrEvents = okrEvents
+        self._okrEventCounter = okrEventCounter
+        self._openOkrProbeEvent = None
+        self._openOkrProbeSessionEvent = None
         self._attentionEvents = []
         probeEnabled = (
             getattr(self, 'attentionProbe', False)
@@ -1303,6 +1590,7 @@ class ContrastDots(protocol):
                     win.flip()
                     if motionStart is None:
                         motionStart = trialClock.getTime()
+                    self._onOkrMotionSample(trialClock, blockIndex, blockDirection)
                     if probeEnabled:
                         if self._handleMotionKeys(
                             trialClock, blockIndex, frameContrast, ppd_h, ppd_v, probeIndex,
@@ -1394,6 +1682,10 @@ class ContrastDots(protocol):
                 # Audio players and celebration clips cannot be pickled with the experiment.
                 self._attentionProbeSound = None
                 self._celebrationSoundRefs = None
+            self._okrEvents = None
+            self._okrEventCounter = None
+            self._openOkrProbeEvent = None
+            self._openOkrProbeSessionEvent = None
             okrLogPath = self._writeOkrLogFile(okrEvents)
             if okrLogPath is not None:
                 print('--> Wrote OKR condition log for slowphase-okr:', okrLogPath)

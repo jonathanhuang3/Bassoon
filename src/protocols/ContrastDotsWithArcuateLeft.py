@@ -2,8 +2,8 @@
 """
 Contrast Dots with a gaze-contingent left-eye arcuate defect.
 
-The arc starts at 15° temporal on the horizontal meridian, arches through
-the upper field, and ends at 22° nasal. It is narrow at the temporal end
+The arc starts at 15° temporal on the horizontal meridian, peaks about 10°
+above fixation, and ends at 20° nasal. It is narrow at the temporal end
 and wider nasally. Blocked Hemifield chooses superior ('upper') or inferior
 ('lower').
 """

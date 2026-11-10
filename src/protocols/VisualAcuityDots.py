@@ -8,7 +8,6 @@ Created on Fri Jul 16 12:09:17 2021
 from protocols.protocol import protocol
 from psychopy import core, visual, data, event, monitors
 from psychopy.hardware import keyboard
-from datetime import datetime
 from pathlib import Path
 import numpy as np
 import serial, random, math, time, asyncio, os
@@ -179,15 +178,16 @@ class VisualAcuityDots(protocol):
         else:
             logDir = Path(logDir)
         logDir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        safeName = str(self.protocolName).replace(' ', '_')
-        logPath = logDir / ('OKR_Log_{name}_{stamp}.txt'.format(
-            name=safeName, stamp=stamp,
-        ))
+        logPath = self._okrLogFilePath(logDir)
         directionText = ', '.join('{g:g}'.format(g=d) for d in self.orientations)
+        pairedAsc = self._pairedEyeLinkAscName()
         headerLines = [
             '# OKR Condition Log',
             '# StimulusName: Bassoon {name}'.format(name=self.protocolName),
+        ]
+        if pairedAsc:
+            headerLines.append('# PairedEyeLinkAsc: {name}'.format(name=pairedAsc))
+        headerLines += [
             '# TimeBase: seconds from EyeLink SYNCTIME (sent when stimulus timing clock starts, after setup)',
             '# DirectionsDeg: {dirs}'.format(dirs=directionText),
             '# LowerLogMAR: {v:g}'.format(v=self.lowerLogMAR),

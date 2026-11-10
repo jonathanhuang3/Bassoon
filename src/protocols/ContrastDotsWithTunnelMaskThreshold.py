@@ -3,11 +3,14 @@
 Contrast Dots with Tunnel Mask Threshold ramps a gaze-contingent tunnel aperture
 from 0° diameter up in fixed steps (default +1° every 2 s) until a peak size.
 
-Peak defaults to 31° (≈ vertical FOV on a 27″ monitor at 60 cm).
+Peak defaults to 20° diameter.
 Set tunnelPeakDiameterDegrees to 0 for full-screen diagonal at run time.
 
-For each direction in directions, one expanding-tunnel trial is shown, separated
-by the black fixation cross (tailTime). Dots stay at full white contrast.
+One expanding-tunnel trial is shown for each direction. The default is the four
+cardinal directions (right, up, left, and down). Trials are separated by the
+black fixation cross (tailTime).
+Dots stay at full white contrast. Six red attention probes are spread across
+each ramp.
 """
 import math
 
@@ -22,16 +25,17 @@ class ContrastDotsWithTunnelMaskThreshold(ContrastDotsWithTunnelMask):
         self.protocolName = 'ContrastDotsWithTunnelMaskThreshold'
         self.dotSizeDegrees = 1.0
         self.speed = 10.0
-        self.directions = [90.0, 270.0]
+        self.directions = [0.0, 90.0, 180.0, 270.0]  # degrees - right, up, left, down
         self.contrasts = [1.0]
-        self.attentionProbe = False
+        self.attentionProbe = True
+        self.attentionProbeCount = 6  # red probes spread across each tunnel ramp
         self.postStimTime = 0.0
         self.tailTime = 4.0 #seconds - fixation cross between tunnel ramp trials
         # Tunnel ramp: start fully occluded, grow clear aperture around gaze.
         self.tunnelVisibleDiameterDegrees = 0.0
         self.tunnelStepDegrees = 1.0
         self.tunnelStepDuration = 2.0 #seconds spent at each diameter
-        self.tunnelPeakDiameterDegrees = 31.0  # ≈ VFOV @ 27″ / 60 cm; 0 = full-screen diagonal
+        self.tunnelPeakDiameterDegrees = 20.0  # peak clear-aperture diameter; 0 = full-screen diagonal
         self._autoTunnelPeakDegrees = 31.0  # fallback for time estimates before a window exists
         self._currentTunnelDiameter = None
         self._syncStimTimeFromRamp()
@@ -146,6 +150,84 @@ class ContrastDotsWithTunnelMaskThreshold(ContrastDotsWithTunnelMask):
             # Sparse console update at integer-ish steps (including start).
             if abs(diameter - round(diameter)) < 1e-9:
                 print('--> Tunnel diameter now {d:g}°'.format(d=diameter))
+
+
+    def _okrExtraFields(self, blockIndex, direction=None):
+        '''Diameter changes during the ramp, so one value cannot cover the whole trial.'''
+        return {
+            'hemifield': 'NA',
+            'tunnelDiameterDeg': 'NA',
+        }
+
+
+    def _onOkrMotionSample(self, trialClock, blockIndex, direction):
+        diameter = getattr(self, '_currentTunnelDiameter', None)
+        if diameter is None:
+            return
+        if getattr(self, '_okrOpenTunnelDiameter', None) == diameter:
+            return
+        now = trialClock.getTime()
+        self._closeOkrTunnelDiameter(now)
+        self._openOkrTunnelDiameter(now, diameter, blockIndex, direction)
+
+
+    def _closeOkrMotionAnnotations(self, endTime):
+        self._closeOkrTunnelDiameter(endTime)
+
+
+    def _openOkrTunnelDiameter(self, startTime, diameter, blockIndex, direction):
+        events = getattr(self, '_okrEvents', None)
+        counter = getattr(self, '_okrEventCounter', None)
+        if events is None or counter is None:
+            return
+        diameterText = '{g:g}'.format(g=float(diameter))
+        row = {
+            'eventIndex': self._nextOkrEventIndex(counter),
+            'eventType': 'TunnelDiameter',
+            'contrastBlockIndex': blockIndex,
+            'startTime': startTime,
+            'endTime': startTime,
+            'direction': self._directionLabel(direction),
+            'contrastLevel': 'NA',
+            'dotColor': 'NA',
+            'usePersistentDots': int(self._usePersistentDots()),
+            'isAnchor100': 'NA',
+            'probeNumber': 'NA',
+            'tunnelDiameterDeg': diameterText,
+        }
+        row.update(self._okrTrialFields(blockIndex, direction))
+        row['tunnelDiameterDeg'] = diameterText
+        row['direction'] = self._directionLabel(direction)
+        row['condition'] = 'direction {g:g} deg ({label}); tunnel diameter {d} deg'.format(
+            g=float(direction),
+            label=self._directionLabel(direction),
+            d=diameterText,
+        )
+        events.append(row)
+        sessionRow = self._recordOkrSessionEvent(
+            'TunnelDiameter', startTime, startTime,
+            direction=row['direction'],
+            blockOrEpochIndex=blockIndex,
+        )
+        self._okrOpenTunnelRow = row
+        self._okrOpenTunnelSessionEvent = sessionRow
+        self._okrOpenTunnelDiameter = diameter
+
+
+    def _closeOkrTunnelDiameter(self, endTime):
+        row = getattr(self, '_okrOpenTunnelRow', None)
+        if row is None:
+            return
+        row['endTime'] = endTime
+        sessionRow = getattr(self, '_okrOpenTunnelSessionEvent', None)
+        if sessionRow is not None:
+            sessionRow['protocolEndTime'] = endTime
+            sessionZero = getattr(self, '_okrProtocolSessionZero', None)
+            if sessionZero is not None:
+                sessionRow['endTime'] = sessionZero + endTime
+        self._okrOpenTunnelRow = None
+        self._okrOpenTunnelSessionEvent = None
+        self._okrOpenTunnelDiameter = None
 
 
     def _epochContrastDisplay(self, epoch):

@@ -142,7 +142,8 @@ class FieldDefectMask(ContrastDotsWithTunnelMask):
         self.transitionWidthDegrees = 1.0  # raised-cosine width on the soft edges, in degrees
         self.maskColor = [0.0, 0.0, 0.0]  # mid-gray, matching the background
         self.persistentDots = False
-        self.contrasts = [1.0, 0.1, 0.05, -0.05, -0.1, -1.0]
+        self.contrasts = [1.0]
+        self.directions = [0.0, 90.0, 180.0, 270.0]  # degrees - right, up, left, down
         self.eye = 'right'  # 'right' or 'left' visual field. Nasal and temporal sides follow this eye.
 
     def _stripLegacyTunnelParams(self):
@@ -152,6 +153,12 @@ class FieldDefectMask(ContrastDotsWithTunnelMask):
 
     def _defectName(self):
         return 'field defect'
+
+    def _okrExtraFields(self, blockIndex, direction=None):
+        fields = super()._okrExtraFields(blockIndex, direction)
+        fields['hemifield'] = str(self.blockedHemifield).strip().lower()
+        fields['tunnelDiameterDeg'] = 'NA'
+        return fields
 
     def _stimulusTitle(self):
         eye = str(self.eye).strip().lower()
@@ -227,10 +234,9 @@ class FieldDefectMask(ContrastDotsWithTunnelMask):
         )
 
     def prepareBeforeWaitingRoom(self, win):
-        '''Build the scotoma mask while the waiting room is already on screen.'''
+        '''Build the scotoma, dots, and fixation cross while the waiting room is up.'''
         print('--> Preparing the scotoma mask before the trial starts.')
-        ppd_h, ppd_v, _dotDiameter, _probeDiameter, _dotRadius = self._stimulusScaleFromWin(win)
-        self._initPerRunStimulus(win, (ppd_h, ppd_v))
+        super().prepareBeforeWaitingRoom(win)
 
     def _maskIsReady(self, win, ppd_xy):
         ppd_h, ppd_v = ppd_xy
@@ -302,12 +308,13 @@ class FieldDefectMask(ContrastDotsWithTunnelMask):
 
 class NasalStepMask(FieldDefectMask):
     '''
-    Nasal step: a smooth ceiling on the horizontal meridian in the nasal field.
+    Nasal step: a finite patch on the horizontal meridian in the nasal field.
 
-    For a right eye and an upper defect, the step is only where x <= -10° and
-    y > 0. The upper edge passes through (-10°, 3°), (-15°, 5°), (-21°, 7°),
-    and stays at 9° for x <= -27°. The meridian is a hard edge. The central
-    10° stays clear. A left eye mirrors x. A lower hemifield mirrors y.
+    For a right eye and an upper defect, the step runs from 10° to 30° nasal
+    and stays above the horizontal meridian. The upper edge passes through
+    (-10°, 3°), (-15°, 5°), (-21°, 7°), and (-27°, 9°). The meridian is a
+    hard edge. The central 10° stays clear. A left eye mirrors x. A lower
+    hemifield mirrors y. The patch keeps this retinal size as gaze moves.
     '''
 
     def __init__(self):
@@ -315,8 +322,9 @@ class NasalStepMask(FieldDefectMask):
         self.blockedHemifield = 'upper'  # 'upper' or 'lower'. The step sits on the horizontal meridian.
         self.nasalBoundaryX = [-10.0, -15.0, -21.0, -27.0]  # right-eye upper border x, degrees. Nasal is negative. Left eye mirrors x.
         self.nasalBoundaryY = [3.0, 5.0, 7.0, 9.0]  # right-eye upper border y, degrees. Lower hemifield mirrors y.
+        self.nasalOuterDegrees = 30.0  # far edge of the step, degrees nasal of fixation. The defect ends here.
         self.centralClearDegrees = 10.0  # radius around fixation that stays clear.
-        self.transitionWidthDegrees = 1.0  # soft edge on the ceiling and the nasal wall, in degrees. The meridian stays hard.
+        self.transitionWidthDegrees = 1.0  # soft edge on the ceiling and both nasal walls, in degrees. The meridian stays hard.
 
     def _defectName(self):
         return 'Nasal Step'
@@ -331,15 +339,22 @@ class NasalStepMask(FieldDefectMask):
         if float(self.centralClearDegrees) < 0:
             tf = False
             errorMessage.append('Central Clear must be 0 or greater degrees.')
+        if float(self.nasalOuterDegrees) <= 0:
+            tf = False
+            errorMessage.append('Nasal Outer must be greater than 0 degrees.')
+        elif len(xs) >= 1 and float(self.nasalOuterDegrees) <= -float(np.max(xs)):
+            tf = False
+            errorMessage.append('Nasal Outer must be farther from fixation than the inner nasal wall.')
         return tf, errorMessage
 
     def _maskLogLine(self):
         return (
-            '{eye} eye, {side} nasal step along a smooth ceiling, '
+            '{eye} eye, {side} nasal step from the inner wall to {outer:g}° nasal, '
             'central {clear:g}° clear, transition {w:g}°'
         ).format(
             eye=self.eye,
             side=self.blockedHemifield,
+            outer=float(self.nasalOuterDegrees),
             clear=float(self.centralClearDegrees),
             w=float(self.transitionWidthDegrees),
         )
@@ -349,8 +364,12 @@ class NasalStepMask(FieldDefectMask):
         into_hemifield = y_deg if self.blockedHemifield == 'upper' else -y_deg
         ceiling = nasal_ceiling(canonical_x, self.nasalBoundaryX, self.nasalBoundaryY)
         wall_x = float(np.max(self.nasalBoundaryX))
-        # Positive inside: nasal to the inner wall, and below the ceiling.
-        occlusion = np.minimum(wall_x - canonical_x, ceiling - into_hemifield)
+        # Far edge in right-eye degrees. The step is a finite patch, so looking
+        # temporally cannot recruit an endless nasal field onto the screen.
+        outer_x = -abs(float(self.nasalOuterDegrees))
+        # Positive inside: between the inner and outer nasal walls, and below the ceiling.
+        occlusion = np.minimum(wall_x - canonical_x, canonical_x - outer_x)
+        occlusion = np.minimum(occlusion, ceiling - into_hemifield)
         radius = np.hypot(x_deg, y_deg)
         occlusion = np.minimum(occlusion, radius - float(self.centralClearDegrees))
         mask = self._raisedCosineOpacity(occlusion, float(self.transitionWidthDegrees))
@@ -364,7 +383,7 @@ class ArcuateMask(FieldDefectMask):
     Arcuate defect: a tapered band along a spline in one hemifield.
 
     For a right eye and an upper defect the centerline runs from (15°, 0°)
-    through (5°, 12°), (0°, 13°), and (−8°, 11°) to (−22°, 0°). Width grows
+    through (6°, 9°), (0°, 10°), and (−8°, 8.5°) to (−20°, 0°). Width grows
     from 2.5° at the temporal end to 7° above fixation to 12° at the nasal end.
     The horizontal meridian is a hard edge. Other borders are soft. The central
     5° stays clear. A left eye mirrors x. A lower hemifield mirrors y.
@@ -373,8 +392,8 @@ class ArcuateMask(FieldDefectMask):
     def __init__(self):
         super().__init__()
         self.blockedHemifield = 'upper'  # 'upper' or 'lower'. The arc bows through this hemifield.
-        self.arcuateCenterX = [15.0, 5.0, 0.0, -8.0, -22.0]  # right-eye centerline x, degrees. Left eye mirrors this.
-        self.arcuateCenterY = [0.0, 12.0, 13.0, 11.0, 0.0]  # right-eye upper centerline y, degrees. Lower hemifield mirrors this.
+        self.arcuateCenterX = [15.0, 6.0, 0.0, -8.0, -20.0]  # right-eye centerline x, degrees. Left eye mirrors this.
+        self.arcuateCenterY = [0.0, 9.0, 10.0, 8.5, 0.0]  # right-eye upper centerline y, degrees. Lower hemifield mirrors this.
         self.temporalWidthDegrees = 2.5  # full band width at the temporal end of the centerline.
         self.fixationWidthDegrees = 7.0  # full band width at the centerline point closest to the vertical meridian.
         self.nasalWidthDegrees = 12.0  # full band width at the nasal end of the centerline.

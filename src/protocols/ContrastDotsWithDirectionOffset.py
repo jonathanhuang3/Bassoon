@@ -162,6 +162,7 @@ class ContrastDotsWithDirectionOffset(ContrastDots):
             'usePersistentDots': int(self._usePersistentDots()),
             'isAnchor100': isAnchor100,
         })
+        events[-1].update(self._okrTrialFields(blockIndex, direction))
         self._recordOkrSessionEvent(
             'ContrastBlock', startTime, endTime,
             direction=directionLabel,
